@@ -23,6 +23,9 @@ export function MessageInput({
     ?.name;
   const inputRef = useRef<HTMLParagraphElement>(null);
   const inflightUuid = useRef<string | undefined>();
+  // C003 — last `startTyping` call time. Initial 0 deliberately lets
+  // the FIRST keystroke bypass the time-throttle (Date.now() - 0 ≫ 10s).
+  const lastTypingPing = useRef<number>(0);
   const writeMessage = useMutation(api.messages.writeMessage);
   const startTyping = useSendInput(engineId, 'startTyping');
   const currentlyTyping = conversation.isTyping;
@@ -30,10 +33,22 @@ export function MessageInput({
   const onKeyDown = async (e: KeyboardEvent) => {
     e.stopPropagation();
 
-    // Set the typing indicator if we're not submitting.
+    // Set / refresh the typing indicator if we're not submitting.
     if (e.key !== 'Enter') {
-      console.log(inflightUuid.current);
-      if (currentlyTyping || inflightUuid.current !== undefined) {
+      // C003 — KEEP the in-flight re-entrancy guard (prevents parallel
+      // startTyping while a previous one is awaiting). REMOVED the
+      // `currentlyTyping ||` short-circuit (was the bug — it refused
+      // to refresh once any typing was registered, so the indicator
+      // auto-cleared at TYPING_TIMEOUT and the agent could interject).
+      if (inflightUuid.current !== undefined) {
+        return;
+      }
+      // C003 — 10s time-throttle: re-call startTyping at most once per
+      // 10s while user keeps typing. The startTyping handler is
+      // idempotent on same-playerId (conversation.ts:296-301), so each
+      // refresh just resets `isTyping.since = now`. With TYPING_TIMEOUT
+      // 60s the throttle provides ~6 refreshes per minute — plenty.
+      if (Date.now() - lastTypingPing.current < 10_000) {
         return;
       }
       inflightUuid.current = crypto.randomUUID();
@@ -44,6 +59,7 @@ export function MessageInput({
           conversationId: conversation.id,
           messageUuid: inflightUuid.current,
         });
+        lastTypingPing.current = Date.now();
       } finally {
         inflightUuid.current = undefined;
       }

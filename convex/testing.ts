@@ -12,13 +12,14 @@ import schema from './schema';
 import { DELETE_BATCH_SIZE } from './constants';
 import { kickEngine, startEngine, stopEngine } from './aiTown/main';
 import { insertInput } from './aiTown/insertInput';
-import { fetchEmbedding } from './util/llm';
 import { chatCompletion } from './util/llm';
 import { startConversationMessage } from './agent/conversation';
 import { GameId } from './aiTown/ids';
 
-// Clear all of the tables except for the embeddings cache.
-const excludedTables: Array<TableNames> = ['embeddingsCache'];
+// P1-1D: embeddings are gone (no fetchEmbedding / embeddingsCache /
+// memoryEmbeddings). excludedTables is empty — wipeAllTables clears
+// every schema-defined table.
+const excludedTables: Array<TableNames> = [];
 
 export const wipeAllTables = internalMutation({
   handler: async (ctx) => {
@@ -168,12 +169,8 @@ export const randomPositions = internalMutation({
   },
 });
 
-export const testEmbedding = internalAction({
-  args: { input: v.string() },
-  handler: async (_ctx, args) => {
-    return await fetchEmbedding(args.input);
-  },
-});
+// P1-1D: testEmbedding removed (fetchEmbedding no longer exists; the
+// human-memory port runs Grok-only with no embedding endpoint).
 
 export const testCompletion = internalAction({
   args: {},

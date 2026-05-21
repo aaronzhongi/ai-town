@@ -72,23 +72,22 @@ export default function Home() {
         </Unauthenticated>
       </div> */}
 
-      <div className="w-full lg:h-screen min-h-screen relative isolate overflow-hidden lg:p-8 shadow-2xl flex flex-col justify-start">
-        <h1 className="mx-auto text-4xl p-3 sm:text-8xl lg:text-9xl font-bold font-display leading-none tracking-wide game-title w-full text-left sm:text-center sm:w-auto">
+      {/* Fit-to-viewport: minimize the chrome that was crowding <Game/>.
+          Padding lg:p-8 → lg:p-2 (saves 48px each axis); title shrunk to
+          a single compact line; tagline hidden on lg (pure decoration). */}
+      <div className="w-full lg:h-screen min-h-screen relative isolate overflow-hidden lg:p-2 shadow-2xl flex flex-col justify-start">
+        <h1 className="mx-auto text-2xl p-1 sm:text-3xl lg:text-4xl font-bold font-display leading-none tracking-wide game-title w-full text-left sm:text-center sm:w-auto">
           AI Town
         </h1>
 
-        <div className="max-w-xs md:max-w-xl lg:max-w-none mx-auto my-4 text-center text-base sm:text-xl md:text-2xl text-white leading-tight shadow-solid">
+        <div className="hidden lg:hidden max-w-xs md:max-w-xl lg:max-w-none mx-auto my-1 text-center text-base text-white leading-tight shadow-solid">
           A virtual town where AI characters live, chat and socialize.
-          {/* <Unauthenticated>
-            <div className="my-1.5 sm:my-0" />
-            Log in to join the town
-            <br className="block sm:hidden" /> and the conversation!
-          </Unauthenticated> */}
         </div>
 
         <Game />
 
-        <footer className="justify-end bottom-0 left-0 w-full flex items-center mt-4 gap-3 p-6 flex-wrap pointer-events-none">
+        {/* Trimmed footer (mt-4→mt-1, p-6→p-2) — gives ~50px back to <Game/>. */}
+        <footer className="justify-end bottom-0 left-0 w-full flex items-center mt-1 gap-3 p-2 flex-wrap pointer-events-none">
           <div className="flex gap-4 flex-grow pointer-events-none">
             <FreezeButton />
             <MusicButton />

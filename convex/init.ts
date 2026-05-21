@@ -7,14 +7,13 @@ import { insertInput } from './aiTown/insertInput';
 import { Id } from './_generated/dataModel';
 import { createEngine } from './aiTown/main';
 import { ENGINE_ACTION_DURATION } from './constants';
-import { detectMismatchedLLMProvider } from './util/llm';
+// P1-1D: detectMismatchedLLMProvider removed with the embeddings teardown.
 
 const init = mutation({
   args: {
     numAgents: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    detectMismatchedLLMProvider();
     const { worldStatus, engine } = await getOrCreateDefaultWorld(ctx);
     if (worldStatus.status !== 'running') {
       console.warn(

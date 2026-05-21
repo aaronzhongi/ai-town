@@ -321,6 +321,22 @@ export const conversationInputs = {
       }
       conversation.lastMessage = { author: playerId, timestamp: args.timestamp };
       conversation.numMessages++;
+      // Fix B (HumanMemory_AITown_Plan trial): typing a chat message is
+      // activity. Without this, a human player chatting for several
+      // minutes without moving the avatar gets auto-kicked by
+      // `Player.tick`'s `HUMAN_IDLE_TOO_LONG` check (player.ts:85)
+      // because pre-Fix-B `lastInput` was only set by `Player.join`
+      // (player.ts:221). Update it on every message send so chat counts.
+      //
+      // This handler is also invoked from NPC `agentSendMessage`
+      // (`agentInputs.ts:108`), so NPC senders ALSO get a `lastInput`
+      // bump here — that is harmless because `Player.tick`'s idle-kick
+      // is gated on `this.human` (player.ts:85), so an NPC's
+      // `lastInput` value is never consulted.
+      const sender = game.world.players.get(playerId);
+      if (sender) {
+        sender.lastInput = now;
+      }
       return null;
     },
   }),
