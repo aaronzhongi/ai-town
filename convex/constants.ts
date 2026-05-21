@@ -123,5 +123,119 @@ export const DIALOG_TEMPERATURE = 0.85;
 
 // ImpressionDelta overlay bounds (jynew AppendImpressionDelta; extract §3).
 // Cap on number of dated overlay entries kept and total char length.
+// v3.5: still referenced by reflection.ts dead-path tests (kept for them);
+// no live code path uses these in v3.5 (semantic memory is in knowledgeFact).
 export const IMPRESSION_DELTA_MAX_ENTRIES = 3;
 export const IMPRESSION_DELTA_MAX_CHARS = 600;
+
+// ─────────────────────────────────────────────────────────────────────
+// Memory v3.5 — Tiered Knowledge-DB caps (Memory plan §4, N10 additions).
+// ST and LT have EQUAL nominal char/entry budgets (L4). Numbers are
+// reviewer-checked educated guesses; tunable in trial.
+// ─────────────────────────────────────────────────────────────────────
+
+// Per-owner totals across ALL entities (per NPC) — ST tier.
+export const KNOWLEDGE_ST_MAX_ENTRIES = 30; // soft (Op A "in-place merge or accelerate B" trigger)
+export const KNOWLEDGE_ST_MAX_CHARS = 3000; // soft
+export const KNOWLEDGE_LT_MAX_CHARS = 3000; // hard
+
+// Per-fact cap (each entry's factText soft cap) + history depth.
+export const KNOWLEDGE_FACT_MAX_CHARS = 200;
+export const KNOWLEDGE_FACT_HISTORY_CAP = 5;
+
+// Op B periodic consolidation interval (ms). ST pressure shortens this
+// dynamically (Memory plan §5.2).
+export const CONSOLIDATION_INTERVAL_MS = 5 * 60 * 1000; // 5 min
+export const CONSOLIDATION_INTERVAL_MS_UNDER_PRESSURE = 60 * 1000; // 1 min when ST over soft cap
+
+// §6 render — per-target / general slice (how many fact rows shown).
+export const RENDER_FACTS_PER_TARGET = 8;
+export const RENDER_FACTS_GENERAL = 6;
+
+// L2-MF2 — new-entries-protected floor. Op C's eligible-set is
+// LT rows where pinned=false AND (now - createdAt) > this. Prevents
+// the pathological "fact arrives, gets promoted to LT in 5min, deleted
+// at 6min" oscillation.
+export const KNOWLEDGE_LT_COMPACT_MIN_AGE_MS = 30 * 60 * 1000; // 30 min
+
+// L4-MF3 — perception event coalescing window + outer rate-limit safety
+// net per NPC. Meeting events do NOT coalesce (each new player is its
+// own event); seenPlayers keeps it one-shot anyway.
+export const PERCEPTION_COALESCE_WINDOW_MS = 5 * 1000;
+export const PERCEPTION_OP_A_MAX_PER_MINUTE = 6;
+
+// L4-MF2 / Q5 — Op B batch cap: at most this many least-frequent ST
+// entries per run, batched into ONE Grok call. Bounds Op B's worst-case
+// cost and prevents convex action timeout on large ST sets.
+export const OP_B_BATCH_K_MAX = 5;
+
+// §6 render — fact ranking recency half-life. Newer facts weighted
+// higher in `frequency × exp(-Δt/τ)` ordering. Default τ ≈ 1 day
+// (NPCs reason over recent days, not lifetimes).
+export const RECENCY_HALFLIFE_MS = 24 * 60 * 60 * 1000;
+
+// v3 (L12 / N26) — associative keyword layer. Per-entry cap on
+// keyword-list size (truncation rule: highest assocRatio wins, tiebreak
+// older keyword for stability) + per-keyword char cap.
+export const KNOWLEDGE_FACT_MAX_KEYWORDS = 8;
+export const KNOWLEDGE_KEYWORD_MAX_CHARS = 16;
+
+// v3.2 (Rec 2 / Park et al 2023 §4.1) — importance bounds.
+export const KNOWLEDGE_IMPORTANCE_MIN = 1;
+export const KNOWLEDGE_IMPORTANCE_MAX = 5;
+export const KNOWLEDGE_IMPORTANCE_DEFAULT = 1; // when Op A omits the field
+
+// v3.2 (Rec 6) / v3.4 (C9) — N24 re-fire **perf-only skip** floor.
+// REPLACES the v3.3 all-or-nothing threshold (which caused emotionally-
+// inconsistent flicker as confidence drifted). Croissant-faithful pattern
+// is MULTIPLICATIVE SCALING: every re-fire fires at
+// `intensity_applied = intensity × confidence`. This floor only skips
+// re-fires whose product is below the noise threshold (cheap perf win,
+// not a cognitive contract). Default 0.05; trial-tunable.
+export const N24_REFIRE_PERF_FLOOR = 0.05;
+
+// L23 (v3.3) / C8 (v3.4) — LT capacity split. Pre-v3.4 had a single
+// hard cap of 30. v3.4 separates instinct floor from dynamic (op-a)
+// capacity so instinct pre-occupation does not silently halve effective
+// lived-experience capacity. Hard cap (Op C trigger) = INSTINCT_RESERVE
+// + DYNAMIC_CAP. Soft cap (Op A pressure) inherits DYNAMIC_CAP only;
+// instinct rows never live in ST so they do not count toward Op A
+// pressure.
+export const KNOWLEDGE_LT_INSTINCT_RESERVE = 18; // research deliverable: 15 universal + 3 琳娜 overlay
+export const KNOWLEDGE_LT_DYNAMIC_CAP = 30; // lived-experience LT capacity (was KNOWLEDGE_LT_MAX_ENTRIES in v3.3)
+export const KNOWLEDGE_LT_TOTAL_CAP =
+  KNOWLEDGE_LT_INSTINCT_RESERVE + KNOWLEDGE_LT_DYNAMIC_CAP; // Op C trigger threshold
+
+// L23 (v3.3) / C7 (v3.4) — `__general__` Op A LT slice two-budget rule.
+// Pre-v3.4, all __general__ rows competed for one ~800-char budget;
+// with 15-18 instincts each ~250-350 chars the slice was instinct-
+// saturated. v3.4 separates instinct-side from op-a-side budgets;
+// deterministic keyword-overlap pre-filter selects which instincts are
+// included. Per-entity budget for non-__general__ entities is
+// unchanged (800 chars total).
+export const LT_GENERAL_INSTINCT_BUDGET_CHARS = 2000; // room for ~6-8 most-relevant instincts via keyword pre-filter
+export const LT_GENERAL_OPA_BUDGET_CHARS = 800;
+
+// L23 (v3.3) / render reconcile (v3.4) — render-time floor on instinct
+// surfacing in the §6 general-knowledge block. Prevents Lens 4's
+// "instincts invisible after 1-2 days" failure mode by guaranteeing at
+// least N instinct rows surface in the general block regardless of the
+// `score = importance × frequency × exp(-Δt/τ)` ranking.
+export const INSTINCT_RENDER_FLOOR = 2;
+
+// v3.4 Lens 4 MF3 — Op A self-consistency CI cap (was "5+" unbounded).
+// Caps nightly cost; per-field divergence weighting documented in
+// Memory plan §8 phase 2A.1 prose.
+export const OP_A_CONSISTENCY_CI_MAX_VECTORS = 12;
+
+// Op A LLM call bounds (temperature low for deterministic JSON output;
+// matches reflection's pattern). REFLECT_TEMPERATURE was 0.3; Op A
+// produces structured JSON so we keep deterministic output here.
+export const OP_A_MAX_TOKENS = 800;
+export const OP_A_TEMPERATURE = 0.2;
+
+// Op A scheduling — minimum elapsed time after the prior Op A
+// completion before a new turn-fire is allowed for the same NPC.
+// Coalesces back-to-back turns and bounds outer Op A action volume.
+// Defensive ceiling complementing PERCEPTION_OP_A_MAX_PER_MINUTE.
+export const OP_A_MIN_INTERVAL_MS = 1500;
