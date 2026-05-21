@@ -16,8 +16,12 @@ import type {
 import type * as agent_affect from "../agent/affect.js";
 import type * as agent_contextAssembler from "../agent/contextAssembler.js";
 import type * as agent_conversation from "../agent/conversation.js";
+import type * as agent_instincts from "../agent/instincts.js";
+import type * as agent_knowledgeFacts from "../agent/knowledgeFacts.js";
 import type * as agent_memory from "../agent/memory.js";
 import type * as agent_mindState from "../agent/mindState.js";
+import type * as agent_opA from "../agent/opA.js";
+import type * as agent_opAParse from "../agent/opAParse.js";
 import type * as agent_persona from "../agent/persona.js";
 import type * as agent_reflection from "../agent/reflection.js";
 import type * as agent_worldContext from "../agent/worldContext.js";
@@ -74,8 +78,12 @@ declare const fullApi: ApiFromModules<{
   "agent/affect": typeof agent_affect;
   "agent/contextAssembler": typeof agent_contextAssembler;
   "agent/conversation": typeof agent_conversation;
+  "agent/instincts": typeof agent_instincts;
+  "agent/knowledgeFacts": typeof agent_knowledgeFacts;
   "agent/memory": typeof agent_memory;
   "agent/mindState": typeof agent_mindState;
+  "agent/opA": typeof agent_opA;
+  "agent/opAParse": typeof agent_opAParse;
   "agent/persona": typeof agent_persona;
   "agent/reflection": typeof agent_reflection;
   "agent/worldContext": typeof agent_worldContext;
