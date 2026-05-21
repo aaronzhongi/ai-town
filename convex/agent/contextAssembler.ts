@@ -15,9 +15,11 @@ import {
   renderRing,
   renderEmotion,
   renderPerTarget,
+  renderGeneralKnowledge,
   RingTurn,
 } from './mindState';
 import { Affect } from './affect';
+import { KnowledgeFactView } from './knowledgeFacts';
 
 export type ContextProfile = 'full' | 'leave';
 
@@ -101,12 +103,14 @@ function buildTalkeeSurface(t: TalkeeSurface | null): string | null {
  * in 1B–1D. Returns the assembled block (to be PREPENDED before the
  * retained legacy memory block during coexistence — §4A).
  */
-/** §5.1-5.3 working memory + §5.4 emotion + §5.5 per-target (P1-1B/1C). */
-// v3.5 (Memory plan §3.2 / §6): semantic memory (reflectionSummary /
-// impressionDelta / globalReflection) is no longer carried on mindState
-// — the §6 knowledgeFact block is loaded + rendered separately by the
-// ContextAssembler §6 path (lands with Op A wiring). ShortTerm here
-// carries the AFFECT layer + working-memory scalars + ring only.
+/** §5.1-5.3 working memory + §5.4 emotion + §5.5 per-target + §6 knowledge. */
+// v3.5: semantic memory moved from mindState columns to the
+// `knowledgeFact` table; the §6 render now consumes those rows.
+// `knowledgeForTarget` holds the per-target slice (ST + LT merged,
+// entity = the talkee's playerId); `generalKnowledge` holds the
+// __general__ slice (ST + LT merged). Caller does the DB load + tier
+// merge in `queryPromptData`; ShortTerm carries only the
+// already-loaded views.
 export type ShortTerm = {
   situation?: string;
   task?: string;
@@ -116,6 +120,9 @@ export type ShortTerm = {
   emotion?: Affect | null; // §5.4 owner emotion
   affection?: Affect | null; // §5.5.1 per-target affection
   talkeeName?: string; // §5.5 per-target header
+  // v3.5 (§6): pre-loaded knowledgeFact slices.
+  knowledgeForTarget?: readonly KnowledgeFactView[]; // entity == talkee playerId, both tiers
+  generalKnowledge?: readonly KnowledgeFactView[]; // entity == '__general__', both tiers
   now?: number; // decay clock; defaults to Date.now()
 };
 
@@ -136,21 +143,36 @@ export function buildContext(args: {
     // §4 Long-term Dossier — UNSEEDED (S2): structurally omitted.
     appendSection(parts, renderWorkingMemory(st), SECT_SHORTTERM_BUDGET); // §5.1-5.3
     appendSection(parts, renderEmotion(st.emotion, now), SECT_SHORTTERM_BUDGET); // §5.4
-    // v3.5: §5.0 globalReflection / §5.5.2 reflectionSummary / §5.5
-    // impressionDelta moved to the §6 knowledgeFact block — its render
-    // pass is added by Op A wiring. §5.5 here is just affection + ring.
+    // §5.5 — per-target block: affection + §6 per-target knowledge
+    // sub-block (inserted between affection and ring) + ring.
     appendSection(
       parts,
       renderPerTarget(
         {
           talkeeName,
           affection: st.affection ?? null,
+          knowledgeFacts: st.knowledgeForTarget ?? [],
           ring: st.ring ?? [],
         },
         now,
       ),
       SECT_SHORTTERM_BUDGET,
-    ); // §5.5
+    );
+    // §6 — standalone general-knowledge block. Semantics:
+    //   - `generalKnowledge: undefined` → §6 STRUCTURALLY ABSENT
+    //     (caller didn't load the slice; e.g. test with degenerate
+    //     input, or no NPC context at all).
+    //   - `generalKnowledge: []` → cold-start NPC; render the
+    //     header + 「（暂无）」 placeholder per plan §6 to keep prompt
+    //     structure stable across cold↔warm states.
+    //   - `generalKnowledge: [rows…]` → render with content.
+    if (st.generalKnowledge !== undefined) {
+      appendSection(
+        parts,
+        renderGeneralKnowledge(st.generalKnowledge, now),
+        SECT_SHORTTERM_BUDGET,
+      );
+    }
   } else {
     // Leave = lean profile: §2 self-bio + §5.4 emotion-only + §5.5.3
     // ring-only (NOT affection/summary) — jynew lean Leave profile.

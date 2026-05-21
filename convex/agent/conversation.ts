@@ -479,6 +479,47 @@ export const queryPromptData = internalQuery({
       ? `${dynamicSurroundings}\n\n【近况（沉淀）】\n${overlay}`
       : dynamicSurroundings;
 
+    // v3.5 §6 — load knowledgeFact slices (ST + LT) for the §6 render.
+    // Two slices: per-target (entity == otherPlayerId) and general
+    // (entity == '__general__'). Each slice merges ST + LT for the
+    // assembler to score + sort + truncate deterministically (no Grok
+    // at render time per plan §6 / no JS sort cost concern per
+    // ~60-rows-per-NPC budget).
+    const [perTargetST, perTargetLT, generalST, generalLT] = await Promise.all([
+      ctx.db
+        .query('knowledgeFact')
+        .withIndex('owner_tier_entity', (q) =>
+          q
+            .eq('ownerPlayerId', args.playerId)
+            .eq('tier', 'ST')
+            .eq('entity', args.otherPlayerId as any),
+        )
+        .collect(),
+      ctx.db
+        .query('knowledgeFact')
+        .withIndex('owner_tier_entity', (q) =>
+          q
+            .eq('ownerPlayerId', args.playerId)
+            .eq('tier', 'LT')
+            .eq('entity', args.otherPlayerId as any),
+        )
+        .collect(),
+      ctx.db
+        .query('knowledgeFact')
+        .withIndex('owner_tier_entity', (q) =>
+          q.eq('ownerPlayerId', args.playerId).eq('tier', 'ST').eq('entity', '__general__'),
+        )
+        .collect(),
+      ctx.db
+        .query('knowledgeFact')
+        .withIndex('owner_tier_entity', (q) =>
+          q.eq('ownerPlayerId', args.playerId).eq('tier', 'LT').eq('entity', '__general__'),
+        )
+        .collect(),
+    ]);
+    const knowledgeForTarget = [...perTargetST, ...perTargetLT];
+    const generalKnowledge = [...generalST, ...generalLT];
+
     const shortTerm: ShortTerm = {
       situation: mind?.situation ?? talkerPersonaDoc?.defaultSituation,
       task: mind?.task ?? talkerPersonaDoc?.defaultTask,
@@ -487,9 +528,8 @@ export const queryPromptData = internalQuery({
       // P1-1C: affect decayed at read time (N1/N12) in the assembler.
       emotion: mind?.emotion ?? null,
       affection: mind?.affection ?? null,
-      // v3.5: reflectionSummary / impressionDelta / globalReflection
-      // dropped from mindState; the §6 knowledgeFact block is loaded /
-      // rendered separately (ContextAssembler §6 wiring lands with Op A).
+      knowledgeForTarget,
+      generalKnowledge, // always provided (possibly empty → trivial-skip placeholder per §6)
       talkeeName: talkeeName,
       now: Date.now(),
     };
