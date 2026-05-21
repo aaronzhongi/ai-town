@@ -84,28 +84,24 @@ export function renderEmotion(emotion: Affect | undefined | null, now: number): 
 }
 
 /**
- * §5.5 per-target block (ContextAssembler.cs:670-718). ALL of
- * affection/summary/impressionDelta/ring empty ⇒ whole block omitted
- * (NO bare ·对 X· header). §5.5.1 affection is read-time decayed (N1)
- * toward its baseline; §5.5.2 settled summary; the relocated
- * ImpressionDelta overlay (S6) is rendered **read-only** here next to
- * the settled summary; §5.5.3 ring last (N12 marker via renderRing).
+ * §5.5 per-target block (ContextAssembler.cs:670-718). v3.5 (Memory plan
+ * §3.2): reflectionSummary + impressionDelta have moved to the §6
+ * knowledgeFact block — this function now renders affection + ring only.
+ * Whole block omitted when both empty (NO bare ·对 X· header). §5.5.1
+ * affection is read-time decayed (N1) toward its baseline; §5.5.3 ring
+ * last (N12 marker via renderRing).
  */
 export function renderPerTarget(
   args: {
     talkeeName: string;
     affection?: Affect | null;
-    reflectionSummary?: string | null;
-    impressionDelta?: string | null;
     ring?: RingTurn[];
   },
   now: number,
 ): string | null {
   const hasAffection = !!args.affection;
-  const summary = (args.reflectionSummary ?? '').trim();
-  const impression = (args.impressionDelta ?? '').trim();
   const ringStr = renderRing(args.ring ?? []);
-  if (!hasAffection && !summary && !impression && !ringStr) return null;
+  if (!hasAffection && !ringStr) return null;
 
   const out: string[] = [`·对 ${args.talkeeName}·`];
   if (args.affection) {
@@ -118,8 +114,6 @@ export function renderPerTarget(
         : `当下好恶：${val}（向长期基线缓回）`,
     );
   }
-  if (summary) out.push(`往来印象（已沉淀）：${summary}`);
-  if (impression) out.push(`［本局所历］：${impression}`); // S6 overlay, read-only
   if (ringStr) out.push(ringStr);
   return out.join('\n');
 }

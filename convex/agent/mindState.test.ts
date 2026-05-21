@@ -126,7 +126,7 @@ describe('renderEmotion (§5.4, N1 decay + N12 floor-omit)', () => {
   });
 });
 
-describe('renderPerTarget (§5.5: affection decay, summary, S6 ImpressionDelta, ring)', () => {
+describe('renderPerTarget (§5.5 v3.5: affection decay + ring; semantic fields moved to §6)', () => {
   const aff = (p: Partial<Affect>): Affect => ({
     label: '',
     value: 0.5,
@@ -148,20 +148,6 @@ describe('renderPerTarget (§5.5: affection decay, summary, S6 ImpressionDelta, 
   test('affection label rendered when present', () => {
     const s = renderPerTarget({ talkeeName: '李平', affection: aff({ label: '亲近', value: 0.5 }) }, 0)!;
     expect(s).toContain('当下好恶：0.50（亲近，向长期基线缓回）');
-  });
-  test('summary + S6 relocated ImpressionDelta both render next to each other', () => {
-    const s = renderPerTarget(
-      {
-        talkeeName: '李平',
-        reflectionSummary: '他似乎心地不坏',
-        impressionDelta: '本局他帮了我',
-      },
-      0,
-    )!;
-    expect(s).toContain('往来印象（已沉淀）：他似乎心地不坏');
-    expect(s).toContain('［本局所历］：本局他帮了我');
-    // ImpressionDelta appears after the settled summary (S6 placement)
-    expect(s.indexOf('往来印象（已沉淀）')).toBeLessThan(s.indexOf('［本局所历］'));
   });
   test('ring appended last within the per-target block (N12 marker)', () => {
     const s = renderPerTarget(
@@ -198,7 +184,7 @@ describe('buildContext 1C: emotion in full+leave; per-target only in full', () =
     expect(out).toContain('此刻心绪：警惕');
     expect(out.indexOf('此刻心绪')).toBeLessThan(out.indexOf('·对 李平·'));
   });
-  test('leave lean: §2 + §5.4 emotion + ring-only, NO per-target affection/summary', () => {
+  test('leave lean: §2 + §5.4 emotion + ring-only, NO per-target affection block', () => {
     const out = buildContext({
       profile: 'leave',
       talker,
@@ -206,7 +192,6 @@ describe('buildContext 1C: emotion in full+leave; per-target only in full', () =
       shortTerm: {
         emotion,
         affection: { label: '', value: 0.9, baseline: 0, lastSetMs: 0, halfLifeMs: 900_000 },
-        reflectionSummary: '不该出现的总结',
         ring: [{ speaker: '李平', text: '再见' }],
         now: 0,
       },
@@ -215,7 +200,6 @@ describe('buildContext 1C: emotion in full+leave; per-target only in full', () =
     expect(out).toContain('此刻心绪：警惕');
     expect(out).toContain('最近交谈');
     expect(out).not.toContain('·对 '); // no per-target header in lean Leave
-    expect(out).not.toContain('不该出现的总结'); // summary excluded in lean Leave
   });
 });
 

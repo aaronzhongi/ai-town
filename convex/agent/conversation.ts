@@ -487,9 +487,9 @@ export const queryPromptData = internalQuery({
       // P1-1C: affect decayed at read time (N1/N12) in the assembler.
       emotion: mind?.emotion ?? null,
       affection: mind?.affection ?? null,
-      reflectionSummary: mind?.reflectionSummary ?? null, // written in 1D
-      impressionDelta: mind?.impressionDelta ?? null, // S6 overlay, 1D
-      globalReflection: mind?.globalReflection ?? null, // S4, gated in 1D
+      // v3.5: reflectionSummary / impressionDelta / globalReflection
+      // dropped from mindState; the §6 knowledgeFact block is loaded /
+      // rendered separately (ContextAssembler §6 wiring lands with Op A).
       talkeeName: talkeeName,
       now: Date.now(),
     };

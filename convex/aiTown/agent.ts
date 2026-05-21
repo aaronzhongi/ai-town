@@ -35,8 +35,40 @@ export class Agent {
     started: number;
   };
 
+  // v3.5 perception state (Memory plan §3.1.1 L1-MF2). Bounded per-NPC;
+  // populated by Phase 2D perception-event detection. Phase 2A only
+  // round-trips them through serialize/deserialize.
+  seenPlayers?: string[];
+  spatialBucket?: { bx: number; by: number };
+  lastTimeOfDayBucket?: string;
+
+  // v3.5 Op A concurrency slot (L1-MF5 / L4-MF1) — separate from
+  // inProgressOperation so Op A can run in parallel with
+  // agentGenerateMessage / agentRememberConversation.
+  inProgressOpA?: {
+    started: number;
+    operationId: string;
+  };
+
+  // v3.5 (C3) periodic-consolidation / overflow-compaction locks
+  // (Memory plan §5.2 / §5.3). Schema-mirrored slots so 2B/2C cron
+  // handlers can take/release without a validator mismatch.
+  opBLock?: { started: number; runId: string };
+  opCLock?: { started: number; runId: string };
+
   constructor(serialized: SerializedAgent) {
-    const { id, lastConversation, lastInviteAttempt, inProgressOperation } = serialized;
+    const {
+      id,
+      lastConversation,
+      lastInviteAttempt,
+      inProgressOperation,
+      seenPlayers,
+      spatialBucket,
+      lastTimeOfDayBucket,
+      inProgressOpA,
+      opBLock,
+      opCLock,
+    } = serialized;
     const playerId = parseGameId('players', serialized.playerId);
     this.id = parseGameId('agents', id);
     this.playerId = playerId;
@@ -47,6 +79,12 @@ export class Agent {
     this.lastConversation = lastConversation;
     this.lastInviteAttempt = lastInviteAttempt;
     this.inProgressOperation = inProgressOperation;
+    this.seenPlayers = seenPlayers;
+    this.spatialBucket = spatialBucket;
+    this.lastTimeOfDayBucket = lastTimeOfDayBucket;
+    this.inProgressOpA = inProgressOpA;
+    this.opBLock = opBLock;
+    this.opCLock = opCLock;
   }
 
   tick(game: Game, now: number) {
@@ -264,6 +302,12 @@ export class Agent {
       lastConversation: this.lastConversation,
       lastInviteAttempt: this.lastInviteAttempt,
       inProgressOperation: this.inProgressOperation,
+      seenPlayers: this.seenPlayers,
+      spatialBucket: this.spatialBucket,
+      lastTimeOfDayBucket: this.lastTimeOfDayBucket,
+      inProgressOpA: this.inProgressOpA,
+      opBLock: this.opBLock,
+      opCLock: this.opCLock,
     };
   }
 }
@@ -279,6 +323,39 @@ export const serializedAgent = {
       name: v.string(),
       operationId: v.string(),
       started: v.number(),
+    }),
+  ),
+
+  // v3.5 perception state (Memory plan §3.1.1 L1-MF2). Bounded per-NPC;
+  // size-class of existing fields. Populated by Phase 2D perception-event
+  // detection; Phase 2A only round-trips them.
+  seenPlayers: v.optional(v.array(playerId)),
+  spatialBucket: v.optional(v.object({ bx: v.number(), by: v.number() })),
+  lastTimeOfDayBucket: v.optional(v.string()), // 'morning' | 'noon' | 'evening' | 'night'
+
+  // v3.5 Op A concurrency slot (L1-MF5 / L4-MF1) — separate from
+  // inProgressOperation so Op A can fire in parallel with
+  // agentGenerateMessage / agentRememberConversation.
+  inProgressOpA: v.optional(
+    v.object({
+      started: v.number(),
+      operationId: v.string(),
+    }),
+  ),
+
+  // v3.5 (C3) — periodic consolidation / overflow compaction locks
+  // (Memory plan §5.2 / §5.3). Validator-mirrored here so 2B/2C cron
+  // handler patches don't trip validator-vs-runtime mismatch (C3 fix).
+  opBLock: v.optional(
+    v.object({
+      started: v.number(),
+      runId: v.string(),
+    }),
+  ),
+  opCLock: v.optional(
+    v.object({
+      started: v.number(),
+      runId: v.string(),
     }),
   ),
 };

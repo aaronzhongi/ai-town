@@ -102,6 +102,11 @@ function buildTalkeeSurface(t: TalkeeSurface | null): string | null {
  * retained legacy memory block during coexistence — §4A).
  */
 /** §5.1-5.3 working memory + §5.4 emotion + §5.5 per-target (P1-1B/1C). */
+// v3.5 (Memory plan §3.2 / §6): semantic memory (reflectionSummary /
+// impressionDelta / globalReflection) is no longer carried on mindState
+// — the §6 knowledgeFact block is loaded + rendered separately by the
+// ContextAssembler §6 path (lands with Op A wiring). ShortTerm here
+// carries the AFFECT layer + working-memory scalars + ring only.
 export type ShortTerm = {
   situation?: string;
   task?: string;
@@ -110,12 +115,8 @@ export type ShortTerm = {
   // P1-1C affect (read-time decayed via N1):
   emotion?: Affect | null; // §5.4 owner emotion
   affection?: Affect | null; // §5.5.1 per-target affection
-  reflectionSummary?: string | null; // §5.5.2 settled summary (written in 1D)
-  impressionDelta?: string | null; // §5.5 ImpressionDelta overlay (S6, 1D)
   talkeeName?: string; // §5.5 per-target header
   now?: number; // decay clock; defaults to Date.now()
-  // §5.0 global cross-person fold — S4: built/gated in 1D, no-op for 1 pair.
-  globalReflection?: string | null;
 };
 
 export function buildContext(args: {
@@ -135,16 +136,15 @@ export function buildContext(args: {
     // §4 Long-term Dossier — UNSEEDED (S2): structurally omitted.
     appendSection(parts, renderWorkingMemory(st), SECT_SHORTTERM_BUDGET); // §5.1-5.3
     appendSection(parts, renderEmotion(st.emotion, now), SECT_SHORTTERM_BUDGET); // §5.4
-    // §5.0 GlobalReflection — S4: ≥2-pair gated; no-op this iteration
-    // (never written), so structurally absent. Wired in 1D.
+    // v3.5: §5.0 globalReflection / §5.5.2 reflectionSummary / §5.5
+    // impressionDelta moved to the §6 knowledgeFact block — its render
+    // pass is added by Op A wiring. §5.5 here is just affection + ring.
     appendSection(
       parts,
       renderPerTarget(
         {
           talkeeName,
           affection: st.affection ?? null,
-          reflectionSummary: st.reflectionSummary ?? null,
-          impressionDelta: st.impressionDelta ?? null,
           ring: st.ring ?? [],
         },
         now,
