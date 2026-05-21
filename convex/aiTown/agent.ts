@@ -393,7 +393,7 @@ export const agentSendMessage = internalMutation({
     operationId: v.string(),
   },
   handler: async (ctx, args) => {
-    await ctx.db.insert('messages', {
+    const messageId = await ctx.db.insert('messages', {
       conversationId: args.conversationId,
       author: args.playerId,
       text: args.text,
@@ -407,6 +407,31 @@ export const agentSendMessage = internalMutation({
       leaveConversation: args.leaveConversation,
       operationId: args.operationId,
     });
+    // v3.5 — Op A trigger seam (NPC side): schedule per-turn Op A
+    // for OTHER NPC participants observing this NPC's reply. The
+    // speaker's own self-observation is degenerate (its own utterance
+    // is already in mindState via the act of sending). Single-NPC
+    // trial: no other NPCs exist → this is a no-op. Multi-NPC future:
+    // fires once per non-speaker NPC.
+    const world = await ctx.db.get(args.worldId);
+    if (!world) return;
+    const conv = world.conversations.find((c: any) => c.id === args.conversationId);
+    if (!conv) return;
+    const otherNpcs = world.agents.filter(
+      (a: any) =>
+        a.playerId !== args.playerId &&
+        conv.participants.some((p: any) => p.playerId === a.playerId),
+    );
+    for (const agent of otherNpcs) {
+      await ctx.scheduler.runAfter(0, internal.agent.opA.opAExtract, {
+        worldId: args.worldId,
+        ownerPlayerId: agent.playerId,
+        ownerAgentId: agent.id,
+        otherPlayerId: args.playerId,
+        conversationId: args.conversationId,
+        messageId,
+      });
+    }
   },
 });
 
