@@ -160,9 +160,12 @@ export const knowledgeFactFields = {
 
   // v3.4 (C5) — stable identity for `seedBasicInstincts` idempotency.
   // For source='instinct' rows, this is the manifest-slot identifier
-  // ('I-PHY-1' / 'I-SAF-2' / 'O-LINA-1' / …). Null for source='op-a'.
-  // seedBasicInstincts queries owner_tier_source + compares slot-key
-  // set against the manifest to decide which to insert.
+  // (universal-only, e.g. 'I-PHY-1' / 'I-SAF-2' / 'I-BEL-1'). Null
+  // for source='op-a'. seedBasicInstincts queries owner_tier_source +
+  // compares slot-key set against the manifest to decide which to
+  // insert. Slot keys are UNIVERSAL ONLY per the user scope decision
+  // recorded in 2026-05-21 review — no character-specific (O-*) slots
+  // in the seeded manifest.
   instinctSlotKey: v.optional(v.string()),
 
   // v3.4 (C8) — diagnostic-only: when Op B's apply-step promotes a

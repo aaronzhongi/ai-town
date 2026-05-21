@@ -84,10 +84,15 @@ content research deliverable. Headlines:
   keyword-overlap pre-filter against the input fact) + existing
   `LT_GENERAL_OPA_BUDGET_CHARS = 800`. Stops instinct slice
   saturation that would have blown the per-entity char budget.
-- **C8:** LT caps split into `KNOWLEDGE_LT_INSTINCT_RESERVE = 18` +
-  `KNOWLEDGE_LT_DYNAMIC_CAP = 30` (sum = 48). Op C eligible-set +
+- **C8:** LT caps split into `KNOWLEDGE_LT_INSTINCT_RESERVE = 15` +
+  `KNOWLEDGE_LT_DYNAMIC_CAP = 30` (sum = 45). Op C eligible-set +
   trigger math adjusted. Adds `relatedInstinctId` field for Op B
   promote-as-new-LT fallback diagnostic.
+  > **2026-05-21 fix-up:** reserve was 18 in earlier drafts of this
+  > plan (assuming 15 universal + 3 琳娜 overlay rows). Per user scope
+  > decision the instinct floor is **universal-only** (15 entries, §3
+  > of `Instinct_Manifest_Research.md`); the 3 persona-overlay rows in
+  > §4 are REJECTED-BY-USER-SCOPE. Reserve drops 18→15; total cap 48→45.
 - **C9:** N24 confidence gate REPLACED with multiplicative scaling
   (Croissant-faithful appraisal-graduated pattern):
   `intensity_applied = intensity × confidence`. No threshold OR
@@ -106,15 +111,19 @@ content research deliverable. Headlines:
   invisibility concerns with one consistent policy.
 - **Instinct content** — research deliverable at
   [docs/Instinct_Manifest_Research.md](Instinct_Manifest_Research.md)
-  provides 18 entries (15 universal + 3 琳娜 overlay) grounded in
-  16 cited findings. User-flagged "rely on only-available-male"
-  candidate explicitly decomposed: familiarity-under-threat encoded
-  sex-neutrally (I-SAF-2); elevated-male-wariness encoded universally
+  provides **15 universal entries** (§3 only — §4's 3 persona-overlay
+  rows are REJECTED-BY-USER-SCOPE per 2026-05-21 decision; basic
+  instincts must be universal to "any 18yo (girl) reacting to any
+  situation," not game- or character-specific) grounded in 16 cited
+  findings. User-flagged "rely on only-available-male" candidate
+  explicitly decomposed: familiarity-under-threat encoded sex-
+  neutrally (I-SAF-2); elevated-male-wariness encoded universally
   per Öhman/Mineka + Campbell + stranger-danger lit (I-SAF-3 — user
-  chose to ship as universal per disposition); 琳娜→李平 application
-  left for Op E decision-time (NOT hardcoded). v3.4 §13 replaces
-  the v3.3 scaffold with a pointer to the research deliverable +
-  ingest instructions.
+  chose to ship as universal per disposition); per-character
+  applications (e.g., 琳娜→李平) left for Op E decision-time (NOT
+  hardcoded into the instinct floor). v3.4 §13 replaces the v3.3
+  scaffold with a pointer to the research deliverable + ingest
+  instructions.
 - **R11 cost-delta estimate updated:** v3.2-shipped → v3.4 is
   **~3.3–3.8× total token spend** (up from v3's 2.7× estimate),
   peaks ~5–6× during overlapping Routing v1 calibration trial week.
@@ -525,11 +534,14 @@ TS rebuild discipline.
   doesn't need to know the source either.
 
   **Cross-NPC stance:** each NPC's instinct LT set is per-NPC (owned
-  by `ownerPlayerId`). v3.3 ships with one shared instinct manifest
-  (same instincts for all NPCs); per-persona instinct customization
-  is a future enhancement (e.g., 琳娜's "rely on familiar male"
-  heuristic is persona-specific; a wuxia warrior persona wouldn't
-  carry it).
+  by `ownerPlayerId`). v3.5 ships with one shared **universal-only**
+  instinct manifest (same 15 universal rows for all NPCs per the
+  2026-05-21 scope decision); per-persona instinct customization is
+  a future enhancement (e.g., a wuxia warrior persona could carry
+  combat-doctrine instincts, a child persona could carry attachment-
+  to-caregiver instincts). All persona-specific content currently
+  lives in `persona.personality` / `defaultTask` / `defaultSituation`
+  rather than the instinct floor.
 
 ### 2.4 Cross-entity / general-knowledge facts (sentinel design)
 
@@ -655,12 +667,12 @@ export const knowledgeFactFields = {
 
   // v3.4 (C5) — stable identity for `seedBasicInstincts` idempotency.
   // For source='instinct' rows, this is the manifest-slot identifier
-  // (e.g., 'I-PHY-1' / 'I-SAF-2' / 'O-LINA-1'). For source='op-a'
-  // rows, this is null. seedBasicInstincts queries owner_tier_source
-  // index for existing instinct rows + compares slot-key set against
-  // the manifest to decide which to insert. Repurposes
-  // owner_tier_source from "diagnostic-only" to "load-bearing"
-  // (closes L1-REC1).
+  // (universal-only per 2026-05-21 scope decision, e.g., 'I-PHY-1' /
+  // 'I-SAF-2' / 'I-BEL-1'). For source='op-a' rows, this is null.
+  // seedBasicInstincts queries owner_tier_source index for existing
+  // instinct rows + compares slot-key set against the manifest to
+  // decide which to insert. Repurposes owner_tier_source from
+  // "diagnostic-only" to "load-bearing" (closes L1-REC1).
   instinctSlotKey: v.optional(v.string()),
 
   // v3.4 (C8) — when Op B's apply-step promotes a non-refresh-copy
@@ -922,9 +934,9 @@ export const N24_REFIRE_PERF_FLOOR = 0.05;
 // INSTINCT_RESERVE + DYNAMIC_CAP. Soft cap (Op A trigger) inherits
 // DYNAMIC_CAP for the op-a-side; instinct rows do not count toward
 // Op A pressure (they never live in ST).
-export const KNOWLEDGE_LT_INSTINCT_RESERVE = 18;       // matches research deliverable's 15 universal + 3 琳娜 overlay
+export const KNOWLEDGE_LT_INSTINCT_RESERVE = 15;       // 15 universal entries (Instinct_Manifest_Research.md §3 only; §4 REJECTED-BY-USER-SCOPE 2026-05-21)
 export const KNOWLEDGE_LT_DYNAMIC_CAP = 30;             // lived-experience LT capacity (was KNOWLEDGE_LT_MAX_ENTRIES in v3.3)
-export const KNOWLEDGE_LT_TOTAL_CAP = KNOWLEDGE_LT_INSTINCT_RESERVE + KNOWLEDGE_LT_DYNAMIC_CAP;   // Op C trigger threshold
+export const KNOWLEDGE_LT_TOTAL_CAP = KNOWLEDGE_LT_INSTINCT_RESERVE + KNOWLEDGE_LT_DYNAMIC_CAP;   // Op C trigger threshold (= 45)
 
 // L23 (v3.3) / C7 (v3.4) — `__general__` Op A LT slice two-budget
 // rule. Pre-v3.4, all of __general__'s rows competed for one ~800-char
@@ -1338,10 +1350,10 @@ c1_eligible = knowledgeFact where
   // calcifying chronically-contradicting topics.
 ```
 
-**v3.4 trigger threshold (C8 fold — split LT caps):** Op C fires
+**v3.4 trigger threshold (C8 fold — split LT caps; v3.5 2026-05-21 reserve fix-up 18→15):** Op C fires
 when `knowledgeFact count for owner WHERE tier === 'LT'` exceeds
 `KNOWLEDGE_LT_TOTAL_CAP = KNOWLEDGE_LT_INSTINCT_RESERVE +
-KNOWLEDGE_LT_DYNAMIC_CAP` (sum = 48). The instinct-reserve portion
+KNOWLEDGE_LT_DYNAMIC_CAP` (sum = **45** post-2026-05-21; was 48 when the reserve was 18). The instinct-reserve portion
 is pre-occupied by `seedBasicInstincts`; Op C never deletes / merges
 those rows; the effective Op-C-eligible pool grows as op-a-sourced
 LT rows accumulate. When the op-a-side reaches
@@ -1794,21 +1806,25 @@ research questions) has been answered by a delivered research pass.
 **Canonical source: [docs/Instinct_Manifest_Research.md](Instinct_Manifest_Research.md)** — 16
 cited findings (F1–F16), honest evaluation of the user-flagged
 "only-available-male" candidate, draft `INSTINCT_MANIFEST` constant
-with 15 universal + 3 琳娜 overlay entries, persona-overlay strategy,
-rollout recommendation.
+with 15 universal entries (research §3). The research's §4 (3 琳娜-
+specific overlay rows) is **REJECTED-BY-USER-SCOPE per the
+2026-05-21 decision** — the basic-instinct floor must be universal
+to "any 18yo (girl) reacting to any situation," not character-
+or game-specific. §4 is preserved in the research doc as an audit
+trail of considered-and-deferred research, not for transcription.
 
-**v3.4 user-disposition of the research findings (locked):**
-- **Universal manifest: 15 entries** (3 physio + 5 safety + 3 belonging + 2 esteem + 2 selfActual). All keyword-overlap-verified against `PRIORITY_SEED_TERMS` (Action v1.1 §4).
-- **琳娜 overlay: 3 entries** (Chinese face-culture esteem layer + displacement-specific meaning-seeking + default-courtesy social posture).
+**v3.4 user-disposition of the research findings (locked, with 2026-05-21 scope fix):**
+- **Universal manifest: 15 entries** (3 physio + 5 safety + 3 belonging + 2 esteem + 2 selfActual). All keyword-overlap-verified against `PRIORITY_SEED_TERMS` (Action v1.1 §4). This is the entire seeded instinct floor — `KNOWLEDGE_LT_INSTINCT_RESERVE = 15` (was 18 pre-decision).
+- ~~**琳娜 overlay: 3 entries**~~ **REJECTED-BY-USER-SCOPE (2026-05-21)** — character-specific overlays do not belong in the basic-instinct floor. Face-culture, displacement-meaning-seeking, and default-courtesy posture move to `persona.personality` / `defaultTask` instead. See `Instinct_Manifest_Research.md` §4 banner.
 - **`I-SAF-2` familiarity-under-threat (universal, sex-neutral, Bowlby/Mikulincer-Shaver):** SHIPS as universal — encodes the empirically-supported attachment-figure-seeking heuristic without sex-keying.
 - **`I-SAF-3` elevated-male-wariness (universal, Öhman/Mineka + Campbell + stranger-danger lit):** SHIPS as universal per user disposition 2026-05-21. Research flagged as "most contestable" claim (R1 of research) but empirically defensible; user accepted ship-as-universal over demote-to-overlay.
 - **User-flagged "rely on only-available-familiar-male for safety": REJECTED as sex-keyed instinct** per research §2 evidence (Campbell "Staying Alive", McLean/Anderson gender×fear meta, stranger-danger lit show OPPOSITE signal — unfamiliar males are wariness cue for young women, not safety cue). The 琳娜→李平 application is left for Op E decision-time given world state (李平 being the only weakly-familiar candidate), NOT hardcoded as instinct. **This converges with Lens 2 REC-L2-R2-1 (cognitive review independently concluded the same — strong dual-signal).**
 
-**Rollout per research §6:** ship-all-15+3 with per-level flag for ablation debugging. `seedBasicInstincts` accepts a `levels?: MaslowLevel[]` arg; default = all levels. Trial harness can pass a subset to ablate.
+**Rollout per research §6 (post-2026-05-21 scope fix):** ship-all-**15** universal entries with per-level flag for ablation debugging. `seedBasicInstincts` accepts a `levels?: MaslowLevel[]` arg; default = all levels. Trial harness can pass a subset to ablate. (Research §4's 3 persona-overlay rows are not transcribed.)
 
-**§3.1 schema additions reflected (v3.4):** every instinct row carries `instinctSlotKey: '<manifest-slot-id>'` (e.g., `'I-PHY-1'`, `'I-SAF-2'`, `'O-LINA-1'`) for `seedBasicInstincts` idempotency per C5.
+**§3.1 schema additions reflected (v3.4):** every instinct row carries `instinctSlotKey: '<manifest-slot-id>'` (universal-only, e.g., `'I-PHY-1'`, `'I-SAF-2'`, `'I-BEL-1'`) for `seedBasicInstincts` idempotency per C5.
 
-The original §13.1 format / §13.2 category coverage / §13.3 deferred-research task / §13.4 open Qs are now historical scaffold; the canonical content lives in the research deliverable. Implementer (phase 2A.2) authors `convex/agent/instincts.ts` constants by importing the research deliverable's §3 + §4 verbatim, transcribing into TypeScript with `instinctSlotKey` annotations.
+The original §13.1 format / §13.2 category coverage / §13.3 deferred-research task / §13.4 open Qs are now historical scaffold; the canonical content lives in the research deliverable. Implementer (phase 2A.2) authors `convex/agent/instincts.ts` constants by importing the research deliverable's **§3 only** (15 universal entries) verbatim, transcribing into TypeScript with `instinctSlotKey` annotations. **§4 (3 persona-overlay rows) is NOT transcribed** per 2026-05-21 user scope decision.
 
 #### 13.1 Format
 
@@ -1939,7 +1955,7 @@ distinct after cross-lens de-dup) + 16 RECs. v3.4 folds all of them.
 | C5 | seedBasicInstincts idempotency unspecified | L1-MF2 | NEW `instinctSlotKey: v.string()` schema field; seedBasicInstincts queries `owner_tier_source` index for existing slot-keys, inserts only missing slots; repurposes the previously-diagnostic-only index to load-bearing |
 | C6 | N22 silent contradiction-pin widening | L3-MF-3-2 | Restored narrower N22: `pinned: true` → C2-exempt only; `pinned: true AND source: 'instinct'` → C1+C2+OpB-exempt. §5.3 eligible-set restated explicitly with separate `c1_eligible` and `c2_eligible` definitions |
 | C7 | `__general__` Op A slice instinct-saturated | L4-MF2 | NEW `LT_GENERAL_INSTINCT_BUDGET_CHARS = 2000` + `LT_GENERAL_OPA_BUDGET_CHARS = 800` two-budget rule with deterministic keyword-overlap pre-filter for instinct selection |
-| C8 | LT effective capacity halved | L4-MF1 | NEW `KNOWLEDGE_LT_INSTINCT_RESERVE = 18` + `KNOWLEDGE_LT_DYNAMIC_CAP = 30` split; total cap = 48; Op C trigger math adjusted; `relatedInstinctId` diagnostic field |
+| C8 | LT effective capacity halved | L4-MF1 | NEW `KNOWLEDGE_LT_INSTINCT_RESERVE = 15` (was 18 pre-2026-05-21; user scope fix dropped the 3 琳娜 overlays from the reserve) + `KNOWLEDGE_LT_DYNAMIC_CAP = 30` split; total cap = 45; Op C trigger math adjusted; `relatedInstinctId` diagnostic field |
 | C9 | N24 confidence-gate flicker | L2-MF2 | Multiplicative scaling (Croissant-faithful) replaces all-or-nothing gate: `intensity_applied = intensity × confidence`. Perf-only floor `N24_REFIRE_PERF_FLOOR = 0.05` for skip-the-work optimization |
 | C10 | rememberConversation body rewrite unscheduled | L3-REC-3-1 | Phase 2E explicitly owns rewrite; v3.4 ships option (b) batched-final-turn Op A call |
 
@@ -1962,9 +1978,10 @@ distinct after cross-lens de-dup) + 16 RECs. v3.4 folds all of them.
 - L4-R-Rec-3 (op_a_queue_drop_total counter) → folded into NEW R22 observability counters list
 - L4-R-Rec-4 (affect-staleness contract) → NEW R20 explicitly documents it
 
-**Instinct content (research deliverable ingest):**
-- 18 entries authored (15 universal + 3 琳娜 overlay) per [docs/Instinct_Manifest_Research.md](Instinct_Manifest_Research.md)
-- User-flagged "rely on only-available-male" decomposed: familiarity-not-sex (I-SAF-2 universal) + elevated-male-wariness (I-SAF-3 universal per user disposition) + 琳娜→李平 application left for Op E decision-time (NOT hardcoded)
+**Instinct content (research deliverable ingest, post-2026-05-21 scope fix):**
+- **15 universal entries** authored per [docs/Instinct_Manifest_Research.md](Instinct_Manifest_Research.md) §3 (3 physio + 5 safety + 3 belonging + 2 esteem + 2 selfActual)
+- Research §4's 3 persona-overlay rows (O-LINA-1/-2/-3) are **REJECTED-BY-USER-SCOPE per the 2026-05-21 decision** (basic instinct floor must be universal to any 18yo, not character-specific). Research doc §4 banner preserves them as audit trail; not transcribed
+- User-flagged "rely on only-available-male" decomposed: familiarity-not-sex (I-SAF-2 universal) + elevated-male-wariness (I-SAF-3 universal per user disposition) + per-character application (e.g., 琳娜→李平) left for Op E decision-time (NOT hardcoded into the instinct floor)
 - Strong dual-signal: cognitive review (Lens 2 REC-L2-R2-1) and research (§2) independently concluded same on "rely-on-male"
 
 **Net change v3.3 → v3.4:** 10 distinct MFs + 13 distinct RECs folded · 4 new constants (`KNOWLEDGE_LT_INSTINCT_RESERVE`, `KNOWLEDGE_LT_DYNAMIC_CAP`, `KNOWLEDGE_LT_TOTAL_CAP`, `LT_GENERAL_INSTINCT_BUDGET_CHARS`, `LT_GENERAL_OPA_BUDGET_CHARS`, `INSTINCT_RENDER_FLOOR`, `OP_A_CONSISTENCY_CI_MAX_VECTORS`, `N24_REFIRE_PERF_FLOOR` replacing `N24_REFIRE_THRESHOLD`) · 4 new schema fields (`instinctSlotKey`, `relatedInstinctId`, `opBLock`, `opCLock`) · 1 phase renumbered (2A.0.5 → 2A.2) · 3 new risks (R20-R22) · 0 new locks (rides on existing L23/L7/N22/N24/N26/N27/N28) · 4 Qs status-changed (Q7 ◯ re-opens, Q8 elevated, Q14 partially-addressed, Q12 unchanged) · §13 scaffold replaced with research-deliverable pointer.

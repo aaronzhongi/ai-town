@@ -1,17 +1,26 @@
-# Instinct Manifest Research — basic-instinct LT seed for 琳娜
+# Instinct Manifest Research — universal basic-instinct LT seed
 
-**Status:** v1 draft, content-research deliverable for Memory v3.3 §13.3
-(phase 2A.0.5). Authored 2026-05-21.
+**Status:** v1 draft + 2026-05-21 user-scope decision. Content-research
+deliverable for Memory v3.5 phase 2A.2 (`seedBasicInstincts`).
 
-**Scope.** Produces (a) a literature-grounded synthesis on universal
-human instincts, (b) an honest evaluation of the user-flagged
-"only-available-familiar-male" candidate, (c) a draft
-`INSTINCT_MANIFEST` constant of 15 entries, (d) a separate
-persona-specific overlay for 琳娜, (e) risks / open Qs, and (f) a
-rollout recommendation. **No code touched.** When this doc is
-reviewer-approved, its `INSTINCT_MANIFEST` content gets transcribed
-into `convex/agent/instincts.ts` and consumed by `seedBasicInstincts`
-per Memory v3.3 N28.
+**Scope (post-2026-05-21).** Produces (a) a literature-grounded
+synthesis on universal human instincts, (b) an honest evaluation of
+the user-flagged "only-available-familiar-male" candidate, (c) the
+draft `INSTINCT_MANIFEST` constant of 15 universal entries, (d) risks /
+open Qs, and (e) a rollout recommendation. **No code touched.** When
+this doc is reviewer-approved, only §3 (15 universal entries) gets
+transcribed into `convex/agent/instincts.ts` and consumed by
+`seedBasicInstincts` per Memory v3.5 N28.
+
+**§4 SCOPE NOTE (user decision, 2026-05-21).** §4's three persona-
+overlay rows (O-LINA-1/-2/-3) are **REJECTED-BY-USER-SCOPE** for the
+seeded basic-instinct floor. The user clarified that basic instincts
+must be universal to "any 18-year-old (girl) reacting to any
+situation" — they may not encode game-specific or character-specific
+content. §4 is preserved in this doc as an audit trail of considered-
+and-deferred research, NOT for transcription. See memory note
+`basic-instincts-scope` and `convex/constants.ts` comment on
+`KNOWLEDGE_LT_INSTINCT_RESERVE = 15` (was 18 pre-decision).
 
 **Cross-references.**
 - Format & immutability contract: `docs/Memory_KnowledgeDB_Plan.md` §13
@@ -586,7 +595,42 @@ entry is I-SAF-5 at ~36 chars; all entries comfortably under cap.
 
 ---
 
-## §4 Persona-specific overlay for 琳娜
+## §4 Persona-specific overlay for 琳娜 — REJECTED-BY-USER-SCOPE
+
+> **⚠ DO NOT TRANSCRIBE INTO `convex/agent/instincts.ts`.**
+>
+> Per the user's 2026-05-21 scope decision (memory note
+> `basic-instincts-scope`), the seeded basic-instinct manifest must be
+> **universal to "any 18-year-old (girl) reacting to any situation"** —
+> it may not encode game-context (AI-town world / the introduced
+> character) or character-specific overlays. All three rows below
+> (O-LINA-1 / O-LINA-2 / O-LINA-3) violate that constraint:
+>
+> - **O-LINA-1** is culture-bound (Chinese face culture; won't apply
+>   to a non-Chinese 18yo).
+> - **O-LINA-2** is scenario-bound (the abrupt-displacement-from-
+>   graduation frame; won't apply if she isn't displaced).
+> - **O-LINA-3** is personality-bound (gentle/courteous demeanor; that
+>   belongs in `persona.personality`, not the instinct floor — exactly
+>   the boundary §R2 already flagged).
+>
+> §4 is preserved in this doc as an **audit trail** of considered-and-
+> deferred research (citation tracking + research methodology
+> continuity). When `INSTINCT_MANIFEST` is authored, **only §3**'s 15
+> universal entries are transcribed. The cognitive paths that §4 tried
+> to encode (face-saving, situational meaning-seeking, courtesy-as-
+> baseline) belong elsewhere:
+> - face-culture nuance → talker's `persona.personality` paragraph,
+> - displacement-driven meaning-seeking → `persona.defaultTask`,
+> - courteous demeanor → `persona.personality` + (later) Op H's
+>   action-LLM weighing of universal I-SAF-3 against persona surface.
+>
+> `KNOWLEDGE_LT_INSTINCT_RESERVE = 15` (was 18 pre-decision) in
+> `convex/constants.ts` reflects this. The "+ 3 persona-overlay"
+> phrasing in earlier audit tables (Memory plan §13, §C8 fold notes,
+> R2-fold deltas) is corrected separately in `Memory_KnowledgeDB_Plan.md`.
+
+— Original §4 content follows for the audit trail. **Do not transcribe.** —
 
 The universal manifest above is culture-neutral and sex-aware only
 in the empirically-defensible direction (I-SAF-3 = elevated
@@ -748,9 +792,10 @@ literature doesn't support.
 
 ## §6 Open recommendation — rollout (all-at-once vs incremental per level)
 
-**Recommendation: ship all 15 universal entries + 3 persona-overlay
-entries in one drop, but enable them behind a per-LEVEL feature
-flag at the `seedBasicInstincts` call site.**
+**Recommendation (post-2026-05-21 scope decision): ship all 15
+universal §3 entries in one drop, behind a per-LEVEL feature flag at
+the `seedBasicInstincts` call site. §4 overlay rows are out of scope
+(see §4's REJECTED-BY-USER-SCOPE banner).**
 
 Reasoning:
 
@@ -760,10 +805,10 @@ Reasoning:
   acting weird — which of the 15 instincts is causing it?").
 - **Against pure "incremental per level."** Cognition is
   inter-level: I-SAF-2 (seek familiar) and I-SAF-3 (wary of
-  unfamiliar male) and O-LINA-3 (gentle demeanor) all interact in
-  any single moment 琳娜 sees 李平. Shipping only physiological
-  first would produce uninteresting trial output and not exercise
-  the interactions the manifest exists for.
+  unfamiliar male) interact in any moment an 18-year-old sees a
+  stranger. Shipping only physiological first would produce
+  uninteresting trial output and not exercise the interactions the
+  manifest exists for.
 - **Compromise: ship-all-with-flag.** `seedBasicInstincts(ctx, {
   levels: 'all' | Set<MaslowLevel> })` defaults to `'all'` in
   production but the trial harness can pass a subset to ablate.
@@ -771,13 +816,14 @@ Reasoning:
   debugging — best of both. Adds ~5 lines of code at the seed
   function, no schema impact.
 
-**Implementation hint** (not for this doc, but for whoever
-transcribes into `convex/agent/instincts.ts`): the InstinctSeed
-records here are already grouped by `primaryLevel` so the flag
-filter is a one-line `.filter(r => levels === 'all' || levels.has(r.primaryLevel))`.
+**Implementation hint** (for whoever transcribes into
+`convex/agent/instincts.ts`): the InstinctSeed records in §3 are
+already grouped by `primaryLevel` so the flag filter is a one-line
+`.filter(r => levels === 'all' || levels.has(r.primaryLevel))`.
+**Transcribe §3 only**; §4 is preserved for audit but not for code.
 
 ---
 
 **End of research deliverable.** Next gate: reviewer pass on §2 +
-§3, then phase 2A.0.5 implementation transcribes §3 + §4 into
-`convex/agent/instincts.ts`.
+§3, then phase 2A.2 implementation transcribes **§3 only** into
+`convex/agent/instincts.ts` (§4 deferred per user scope decision).

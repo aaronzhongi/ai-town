@@ -201,10 +201,16 @@ export const N24_REFIRE_PERF_FLOOR = 0.05;
 // + DYNAMIC_CAP. Soft cap (Op A pressure) inherits DYNAMIC_CAP only;
 // instinct rows never live in ST so they do not count toward Op A
 // pressure.
-export const KNOWLEDGE_LT_INSTINCT_RESERVE = 18; // research deliverable: 15 universal + 3 琳娜 overlay
+//
+// v3.5 2A.1 fix-up (2026-05-21 user scope decision, see memory note
+// `basic-instincts-scope`): the seeded instinct manifest is UNIVERSAL
+// ONLY — 15 entries grounded in cross-cultural literature, NO
+// character-specific overlays. Research deliverable §4 (3 琳娜-overlay
+// rows) is marked REJECTED-BY-USER-SCOPE in place; reserve drops 18→15.
+export const KNOWLEDGE_LT_INSTINCT_RESERVE = 15; // 15 universal entries (research deliverable §3 only)
 export const KNOWLEDGE_LT_DYNAMIC_CAP = 30; // lived-experience LT capacity (was KNOWLEDGE_LT_MAX_ENTRIES in v3.3)
 export const KNOWLEDGE_LT_TOTAL_CAP =
-  KNOWLEDGE_LT_INSTINCT_RESERVE + KNOWLEDGE_LT_DYNAMIC_CAP; // Op C trigger threshold
+  KNOWLEDGE_LT_INSTINCT_RESERVE + KNOWLEDGE_LT_DYNAMIC_CAP; // Op C trigger threshold (= 45)
 
 // L23 (v3.3) / C7 (v3.4) — `__general__` Op A LT slice two-budget rule.
 // Pre-v3.4, all __general__ rows competed for one ~800-char budget;
