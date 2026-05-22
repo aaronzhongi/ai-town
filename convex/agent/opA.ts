@@ -50,6 +50,7 @@ import {
   n24Scale,
   selectGeneralSliceInstincts,
 } from './knowledgeFacts';
+import { isNameLearned, deriveAnonymousLabel } from './privacy';
 import {
   computeFactWriteOp,
   normalizeFact,
@@ -138,6 +139,12 @@ export const loadOpAContext = internalQuery({
     }
     const nameMapEntries: Array<{ name: string; playerId: string }> = [];
     const playerIdToName: Record<string, string> = {};
+    // 2A.11 privacy: also collect each PC's anonymous label (derived
+    // from playerPersona's appearance/surfaceManner) so we can swap in
+    // the anonymous label per-target when name is unlearned, AND so
+    // the nameMap accepts both forms when Grok emits either.
+    const pcAnonLabel: Record<string, string> = {};
+    const pcRealName: Record<string, string> = {};
     for (const p of world.players) {
       const pd = await ctx.db
         .query('playerDescriptions')
@@ -165,12 +172,21 @@ export const loadOpAContext = internalQuery({
             .first();
         }
         displayName = surface?.displayName ?? pd.name;
+        // Record the anonymous label for THIS PC so we can swap it
+        // in when name isn't learned yet.
+        if (surface) {
+          pcAnonLabel[p.id] = deriveAnonymousLabel({
+            appearance: surface.appearance,
+            surfaceManner: surface.surfaceManner,
+          });
+          pcRealName[p.id] = displayName;
+        }
       }
       nameMapEntries.push({ name: displayName, playerId: p.id });
       playerIdToName[p.id] = displayName;
     }
     const ownerDisplayName = playerIdToName[args.ownerPlayerId] ?? '?';
-    const otherDisplayName = playerIdToName[args.otherPlayerId] ?? '?';
+    let otherDisplayName = playerIdToName[args.otherPlayerId] ?? '?';
 
     // ── Owner persona (talker bioName + personality for prompt frame).
     const ownerDesc = await ctx.db
@@ -258,6 +274,42 @@ export const loadOpAContext = internalQuery({
     );
     const generalSliceLT = [...generalInstinctSlice, ...generalOpaSlice];
 
+    // 2A.11 PRIVACY GATE — per-PC name-learned check.
+    //
+    // For each PC in the world, determine whether THIS owner-NPC has
+    // learned that PC's name (substring match against all owner's
+    // knowledgeFact rows — same heuristic as queryPromptData). When
+    // not learned, the PC's speaker attribution in recentMessages
+    // becomes the anonymous label, and the nameMap registers BOTH
+    // the anonymous label and the real name → playerId so Grok's
+    // facts resolve correctly whichever surface form it uses.
+    const allOwnerRows = [
+      ...perTargetSliceST,
+      ...perTargetSliceLT,
+      ...generalSliceST,
+      ...generalSliceLT,
+    ];
+    for (const pcId of Object.keys(pcRealName)) {
+      const realName = pcRealName[pcId];
+      const anonLabel = pcAnonLabel[pcId];
+      const learned = isNameLearned(allOwnerRows, realName);
+      if (!learned && anonLabel) {
+        // Swap the rendered name for this PC to the anonymous label.
+        // The real name is still in nameMap (added in the loop above)
+        // so resolveEntity can match it when Grok emits the name
+        // literally (e.g., echoing the PC's own self-introduction).
+        playerIdToName[pcId] = anonLabel;
+        // ALSO register the anonymous label → playerId, so Grok's
+        // facts using the anon label resolve correctly.
+        if (anonLabel !== realName) {
+          nameMapEntries.push({ name: anonLabel, playerId: pcId });
+        }
+      }
+    }
+    // Re-derive otherDisplayName after the swap (it drove the prompt
+    // header — 'You are X talking to Y').
+    otherDisplayName = playerIdToName[args.otherPlayerId] ?? otherDisplayName;
+
     return {
       lastMessage,
       recentMessages,
@@ -265,6 +317,10 @@ export const loadOpAContext = internalQuery({
       otherDisplayName,
       ownerPersonality: ownerPersona?.personality ?? '',
       nameMap: nameMapEntries, // array of {name, playerId} pairs — non-ASCII-key safe
+      // 2A.11: per-id name map ALSO reflects the privacy gate, so
+      // recentMessages render in opAExtract uses anonymous labels for
+      // unlearned PCs.
+      playerIdToName,
       perTargetSliceST,
       perTargetSliceLT,
       generalSliceST,
@@ -691,14 +747,14 @@ export const opAExtract = internalAction({
     // remains exported from opAParse.ts for future re-enablement.
 
     // Assemble prompt.
+    // 2A.11 privacy: use playerIdToName (which loadOpAContext has
+    // already privacy-gated — unlearned PC names show as anonymous
+    // labels). Covers any 3rd-party speaker as well, not just owner
+    // + otherPlayerId.
     const recent = context.recentMessages
       .map((m: Doc<'messages'>) => {
         const speaker =
-          m.author === args.ownerPlayerId
-            ? context.ownerDisplayName
-            : m.author === args.otherPlayerId
-            ? context.otherDisplayName
-            : '?';
+          (context.playerIdToName as Record<string, string>)[m.author as string] ?? '?';
         return `${speaker}：${m.text}`;
       })
       .join('\n');

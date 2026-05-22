@@ -8,6 +8,7 @@ import { MEMORY_RING_CAP, DIALOG_TEMPERATURE } from '../constants';
 import { buildContext, ContextProfile, ShortTerm } from './contextAssembler';
 import { ringWindow } from './mindState';
 import { buildSurroundings } from './worldContext';
+import { isNameLearned, deriveAnonymousLabel } from './privacy';
 
 const selfInternal = internal.agent.conversation;
 
@@ -47,6 +48,7 @@ export async function startConversationMessage(
     lastConversation,
     talkerPersona,
     talkeeSurface,
+    nameLearned,
     shortTerm,
   } = await ctx.runQuery(selfInternal.queryPromptData, {
     worldId,
@@ -64,10 +66,13 @@ export async function startConversationMessage(
   prompt.push(...assemblerBlock('full', talkerPersona, talkeeSurface, shortTerm));
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
   prompt.push(...previousConversationPrompt(otherPlayer, lastConversation));
-  // C003 — positive-frame name-permission nudge (no DO-NOT prefix to
-  // counter-anchor compliance bias). Start: no brevity/variation rule
-  // (no prior turn to repeat).
-  prompt.push(...namePermissionNudge(talkeeSurface?.bioName ?? otherPlayer.name));
+  // C003 + 2A.11: positive-frame name-permission nudge — but ONLY when
+  // the NPC has actually learned the talkee's name (per the privacy
+  // gate in queryPromptData). Pre-2A.11 the nudge fired
+  // unconditionally + leaked the displayName at turn 1.
+  if (nameLearned) {
+    prompt.push(...namePermissionNudge(talkeeSurface?.bioName ?? otherPlayer.name));
+  }
   const lastPrompt = `${player.name} to ${otherPlayer.name}:`;
   prompt.push(lastPrompt);
 
@@ -148,6 +153,7 @@ export async function continueConversationMessage(
     otherAgent,
     talkerPersona,
     talkeeSurface,
+    nameLearned,
     shortTerm,
   } = await ctx.runQuery(selfInternal.queryPromptData, {
     worldId,
@@ -167,11 +173,12 @@ export async function continueConversationMessage(
   ];
   prompt.push(...assemblerBlock('full', talkerPersona, talkeeSurface, shortTerm));
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
-  // C003 — instruction stack reordered: positive permission FIRST,
-  // then brevity (existing), then positive-frame variation (new).
-  // Counter-anchors the model away from compliance-over-conversation
-  // bias from the existing 2× "DO NOT" lines.
-  prompt.push(...namePermissionNudge(talkeeSurface?.bioName ?? otherPlayer.name));
+  // C003 + 2A.11: positive permission FIRST, then brevity (existing),
+  // then positive-frame variation. Permission gated on nameLearned —
+  // when the NPC doesn't know the talkee's name yet, no nudge to use it.
+  if (nameLearned) {
+    prompt.push(...namePermissionNudge(talkeeSurface?.bioName ?? otherPlayer.name));
+  }
   prompt.push(
     `Recent conversation turns appear inside the [最近交谈] block of the context above.`,
     `DO NOT greet them again. Do NOT use the word "Hey" too often. Your response should be brief and within 200 characters.`,
@@ -208,6 +215,7 @@ export async function leaveConversationMessage(
     otherAgent,
     talkerPersona,
     talkeeSurface,
+    nameLearned,
     shortTerm,
   } = await ctx.runQuery(selfInternal.queryPromptData, {
     worldId,
@@ -224,10 +232,13 @@ export async function leaveConversationMessage(
   // removed.
   prompt.push(...assemblerBlock('leave', talkerPersona, talkeeSurface, shortTerm));
   prompt.push(...agentPrompts(otherPlayer, agent, otherAgent ?? null));
-  // C003 — name-permission nudge so the parting line can be polite-by-
-  // name rather than evasive. Leave has its own closing-instruction
-  // (existing) instead of the continue's variation rule (one-shot).
-  prompt.push(...namePermissionNudge(talkeeSurface?.bioName ?? otherPlayer.name));
+  // C003 + 2A.11 — name-permission nudge so the parting line can be
+  // polite-by-name rather than evasive. Gated on nameLearned per the
+  // privacy principle: if she doesn't know the talkee's name, she
+  // takes her leave without using it.
+  if (nameLearned) {
+    prompt.push(...namePermissionNudge(talkeeSurface?.bioName ?? otherPlayer.name));
+  }
   prompt.push(
     `Recent conversation turns appear inside the [最近交谈] block of the context above.`,
     `How would you like to tell them that you're leaving? Your response should be brief and within 200 characters.`,
@@ -444,11 +455,12 @@ export const queryPromptData = internalQuery({
         q.eq('worldId', args.worldId).eq('conversationId', args.conversationId),
       )
       .collect();
-    const talkeeName = talkeeSurface ? talkeeSurface.bioName : otherPlayerDescription.name;
-    const ring = ringWindow(convMessages, MEMORY_RING_CAP).map((m) => ({
-      speaker: m.author === player.id ? playerDescription.name : talkeeName,
-      text: m.text,
-    }));
+    // PRIVACY GATE (2A.11): defer the ring speaker name until AFTER
+    // knowledgeFact slices load below (we need them to detect whether
+    // the talkee's name has been learned per the user's privacy
+    // principle). The placeholder here gets replaced with the effective
+    // name a few lines down.
+    let talkeeName = talkeeSurface ? talkeeSurface.bioName : otherPlayerDescription.name;
     // §5.3 surroundings (Fix A): make the NPC aware of the actual map,
     // not just her §5.1 narrative. Ambient = other players in the world
     // besides talker and current talkee (talkee is already in §3).
@@ -520,6 +532,47 @@ export const queryPromptData = internalQuery({
     const knowledgeForTarget = [...perTargetST, ...perTargetLT];
     const generalKnowledge = [...generalST, ...generalLT];
 
+    // PRIVACY GATE (2A.11): per user design — name/age/personality are
+    // PRIVATE (only owner exposes); appearance + surfaceManner are
+    // PUBLIC. Detect whether this NPC has learned the talkee's name
+    // by scanning all her accumulated knowledgeFact rows for the
+    // displayName substring (persists across conversations because
+    // LT rows persist). When not learned:
+    //   - talkeeName becomes a derived anonymous label
+    //   - effectiveTalkeeSurface drops bioName + ageText (hiding name
+    //     and age from the §3 talkee block; appearance + manner keep)
+    //   - namePermissionNudge skipped at caller (see start/continue/leave
+    //     conversation functions in this file)
+    const talkeeDisplayName = talkeeSurface?.bioName ?? '';
+    const nameLearned = isNameLearned(
+      [...knowledgeForTarget, ...generalKnowledge],
+      talkeeDisplayName,
+    );
+    if (talkeeSurface && !nameLearned) {
+      talkeeName = deriveAnonymousLabel({
+        appearance: talkeeSurface.appearance,
+        surfaceManner: talkeeSurface.surfaceManner,
+      });
+    }
+    // Now build the ring with the privacy-aware talkeeName.
+    const ring = ringWindow(convMessages, MEMORY_RING_CAP).map((m) => ({
+      speaker: m.author === player.id ? playerDescription.name : talkeeName,
+      text: m.text,
+    }));
+    // Effective talkee surface for §3 render. When nameLearned is false,
+    // bioName is replaced by the anonymous label (so the §3 header still
+    // has SOMETHING for the LLM to anchor on) and ageText is zeroed.
+    // Appearance + surfaceManner pass through unchanged (PUBLIC).
+    const effectiveTalkeeSurface = talkeeSurface
+      ? {
+          bioName: nameLearned ? talkeeSurface.bioName : talkeeName,
+          sex: talkeeSurface.sex, // PUBLIC — visually apparent
+          ageText: nameLearned ? talkeeSurface.ageText : '',
+          appearance: talkeeSurface.appearance,
+          surfaceManner: talkeeSurface.surfaceManner,
+        }
+      : null;
+
     const shortTerm: ShortTerm = {
       situation: mind?.situation ?? talkerPersonaDoc?.defaultSituation,
       task: mind?.task ?? talkerPersonaDoc?.defaultTask,
@@ -546,7 +599,11 @@ export const queryPromptData = internalQuery({
       },
       lastConversation,
       talkerPersona,
-      talkeeSurface,
+      // 2A.11: callers get the EFFECTIVE surface (name-privacy applied).
+      // The real bioName for db-internal use is still talkeeDisplayName
+      // available via shortTerm.talkeeName when nameLearned is true.
+      talkeeSurface: effectiveTalkeeSurface,
+      nameLearned, // 2A.11: callers gate namePermissionNudge on this
       shortTerm,
     };
   },

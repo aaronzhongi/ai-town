@@ -65,6 +65,12 @@ function buildSelfBio(p: TalkerPersona | null): string | null {
  * personality/identity/plans/relationships. DO NOT widen it to accept a
  * persona object. Both appearance+manner empty ⇒ §3 omitted entirely
  * (no lone 性别 line) — ContextAssembler.cs:367.
+ *
+ * 2A.11 privacy: `bioName` here is the EFFECTIVE name passed by the
+ * caller — when the NPC has not yet learned the talkee's real name,
+ * the caller substitutes a derived anonymous label (e.g. "不自信的
+ * 人"). `ageText` is empty under the same condition (age is private
+ * by user design). This function just renders what it's given.
  */
 function buildTalkeeSurfaceSealed(
   bioName: string,
@@ -85,7 +91,11 @@ function buildTalkeeSurfaceSealed(
   return s;
 }
 
-/** Public §3 seam — extracts the 5 surface fields only. */
+/** Public §3 seam — extracts the 5 surface fields only.
+ *  2A.11: the caller (queryPromptData) is responsible for ALREADY
+ *  having substituted privacy-gated values (bioName → anonymous
+ *  label, ageText → '') when the talkee's real name hasn't been
+ *  learned yet. This wrapper just unpacks. */
 function buildTalkeeSurface(t: TalkeeSurface | null): string | null {
   if (!t) return null;
   return buildTalkeeSurfaceSealed(

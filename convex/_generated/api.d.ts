@@ -23,6 +23,7 @@ import type * as agent_mindState from "../agent/mindState.js";
 import type * as agent_opA from "../agent/opA.js";
 import type * as agent_opAParse from "../agent/opAParse.js";
 import type * as agent_persona from "../agent/persona.js";
+import type * as agent_privacy from "../agent/privacy.js";
 import type * as agent_reflection from "../agent/reflection.js";
 import type * as agent_worldContext from "../agent/worldContext.js";
 import type * as aiTown_agent from "../aiTown/agent.js";
@@ -85,6 +86,7 @@ declare const fullApi: ApiFromModules<{
   "agent/opA": typeof agent_opA;
   "agent/opAParse": typeof agent_opAParse;
   "agent/persona": typeof agent_persona;
+  "agent/privacy": typeof agent_privacy;
   "agent/reflection": typeof agent_reflection;
   "agent/worldContext": typeof agent_worldContext;
   "aiTown/agent": typeof aiTown_agent;
