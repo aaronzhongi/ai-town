@@ -246,6 +246,46 @@ export const OP_A_CONSISTENCY_CI_MAX_VECTORS = 12;
 export const OP_A_MAX_TOKENS = 1500;
 export const OP_A_TEMPERATURE = 0.2;
 
+// 2A.12: per-call Grok timeout. Trial-5 surfaced a Grok-side hang
+// where one `agentGenerateMessage` chatCompletion ran 139 seconds
+// (well past Convex's ACTION_TIMEOUT=120s), leaving the NPC silent
+// for ~2 minutes until the engine timed out the in-progress operation
+// and recovered.
+//
+// Two-part fix:
+//   (a) chatCompletion uses an AbortController to give up after 30s
+//       (this constant); throws a non-retryable timeout error.
+//   (b) agentGenerateMessage (aiTown/agentOperations.ts) wraps the
+//       call in try/catch + dispatches `agentAbortOperation` input on
+//       failure. The input handler clears `inProgressOperation` AND
+//       the conversation's `isTyping` flag — engine schedules a
+//       fresh operation on the very next tick (~1s).
+// Net NPC-visible recovery on a Grok hang: ~32s instead of ~120s.
+//
+// Op A (`opA.ts:opAExtract`) was already independently fire-and-
+// forget (no inProgressOperation slot), so part (a) alone gives it
+// the same ~32s recovery — its own try/catch surfaces a
+// `[Op A] grok call failed` warn-log without further engine action.
+//
+// Timeout errors are flagged non-retryable in retryWithBackoff —
+// otherwise the 3-retry chain (1s + 10s + 20s backoff) could push
+// total wall-time WORSE than the original ACTION_TIMEOUT. We accept
+// the dropped call rather than chain-retry on hung Grok. Theoretical
+// pathological case (5xx-then-hang on every retry) is bounded by
+// ACTION_TIMEOUT regardless.
+//
+// Typical observed call times (trial 1-5): agentGenerateMessage
+// 1-3s, Op A 12-17s, occasional Op A 57s (Grok-side slowness
+// window). 30s catches genuine hangs without false-aborting
+// typical Op A or any agentGenerateMessage. The 57s outlier would
+// now abort + drop one Op A turn's facts; acceptable trade for
+// hang protection.
+//
+// Limitation: streaming-body consumption (post-fetch) is NOT covered
+// by this AbortController — only the initial response fetch. No live
+// caller uses `body.stream: true`; re-audit if streaming is revived.
+export const GROK_CALL_TIMEOUT_MS = 30_000;
+
 // Op A scheduling — minimum elapsed time after the prior Op A
 // completion before a new turn-fire is allowed for the same NPC.
 // Coalesces back-to-back turns and bounds outer Op A action volume.

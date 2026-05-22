@@ -152,4 +152,49 @@ export const agentInputs = {
       return { agentId };
     },
   }),
+  // 2A.12 — engine-side cleanup when an internalAction fails (e.g.,
+  // the Grok call times out via the GROK_CALL_TIMEOUT_MS abort). The
+  // failing action dispatches this input from its catch block; the
+  // engine clears `inProgressOperation` for the matching operationId
+  // AND clears the conversation's `isTyping` flag when applicable, so
+  // the agent can schedule a fresh operation on the very next tick
+  // (~1s) instead of waiting for the wall-clock ACTION_TIMEOUT (120s).
+  // Operation-id check guards against late-arrival aborts firing
+  // after the agent has already moved on to a new operation.
+  agentAbortOperation: inputHandler({
+    args: {
+      agentId,
+      operationId: v.string(),
+      conversationId: v.optional(conversationId),
+    },
+    handler: (game, now, args) => {
+      const agentIdParsed = parseGameId('agents', args.agentId);
+      const agent = game.world.agents.get(agentIdParsed);
+      if (!agent) {
+        console.debug(`[agentAbortOperation] agent ${args.agentId} not found`);
+        return null;
+      }
+      if (
+        !agent.inProgressOperation ||
+        agent.inProgressOperation.operationId !== args.operationId
+      ) {
+        console.debug(
+          `[agentAbortOperation] agent ${args.agentId} not running ${args.operationId} (slot=${agent.inProgressOperation?.operationId ?? 'none'})`,
+        );
+        return null;
+      }
+      delete agent.inProgressOperation;
+      if (args.conversationId) {
+        const convId = parseGameId('conversations', args.conversationId);
+        const conversation = game.world.conversations.get(convId);
+        if (conversation && conversation.isTyping?.playerId === agent.playerId) {
+          // Clear isTyping so the typing indicator + AWKWARD_CONVERSATION
+          // gates release immediately rather than waiting for
+          // TYPING_TIMEOUT (60s).
+          delete conversation.isTyping;
+        }
+      }
+      return null;
+    },
+  }),
 };

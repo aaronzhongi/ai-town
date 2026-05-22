@@ -69,13 +69,52 @@ export const agentGenerateMessage = internalAction({
       default:
         assertNever(args.type);
     }
-    const text = await completionFn(
-      ctx,
-      args.worldId,
-      args.conversationId as GameId<'conversations'>,
-      args.playerId as GameId<'players'>,
-      args.otherPlayerId as GameId<'players'>,
-    );
+    // 2A.12 — wrap the Grok call (inside completionFn → chatCompletion)
+    // in try/catch. When the GROK_CALL_TIMEOUT_MS abort fires (~30s)
+    // or any other completion error, we dispatch an `agentAbortOperation`
+    // input that clears the agent's `inProgressOperation` slot AND the
+    // conversation's `isTyping` flag immediately, so the next engine
+    // tick can schedule a fresh operation. Without this catch, the
+    // error would propagate, agentSendMessage would never run, and the
+    // engine would wait the full ACTION_TIMEOUT (120s) before
+    // detecting the abandonment via wall-clock — that's the ~2-minute
+    // stall the user reported in trial 5.
+    let text: string;
+    try {
+      text = await completionFn(
+        ctx,
+        args.worldId,
+        args.conversationId as GameId<'conversations'>,
+        args.playerId as GameId<'players'>,
+        args.otherPlayerId as GameId<'players'>,
+      );
+    } catch (e) {
+      console.warn(
+        `[agentGenerateMessage] grok call failed for agent=${args.agentId} conv=${args.conversationId} op=${args.operationId}: ${e}`,
+      );
+      // 2A.12 defense-in-depth: wrap the abort dispatch in its own
+      // try/catch. If the dispatch itself throws (engineNotRunning /
+      // generation mismatch / network glitch), the original abort
+      // would otherwise re-propagate and gate recovery on the 120s
+      // wall-clock fallback (same as the bug we're fixing). Logging
+      // both errors leaves a forensic breadcrumb either way.
+      try {
+        await ctx.runMutation(api.aiTown.main.sendInput, {
+          worldId: args.worldId,
+          name: 'agentAbortOperation',
+          args: {
+            agentId: args.agentId,
+            operationId: args.operationId,
+            conversationId: args.conversationId,
+          },
+        });
+      } catch (dispatchErr) {
+        console.error(
+          `[agentGenerateMessage] abort dispatch ALSO failed for agent=${args.agentId} op=${args.operationId}: ${dispatchErr} (falling back to ACTION_TIMEOUT wall-clock recovery)`,
+        );
+      }
+      return;
+    }
 
     await ctx.runMutation(internal.aiTown.agent.agentSendMessage, {
       worldId: args.worldId,

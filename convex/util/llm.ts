@@ -10,6 +10,11 @@
 // (streaming + non-streaming), retryWithBackoff, the OpenAI-shaped
 // LLMMessage / CreateChatCompletionRequest / CreateChatCompletionResponse
 // type bag, and the streaming ChatCompletionContent class.
+//
+// 2A.12: per-call timeout via AbortController. See
+// GROK_CALL_TIMEOUT_MS in constants.ts for rationale.
+
+import { GROK_CALL_TIMEOUT_MS } from '../constants';
 
 export interface LLMConfig {
   provider: 'openai' | 'together' | 'ollama' | 'custom' | 'grok';
@@ -113,15 +118,39 @@ export async function chatCompletion(
     retries,
     ms,
   } = await retryWithBackoff(async () => {
-    const result = await fetch(config.url + '/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...AuthHeaders(),
-      },
-
-      body: JSON.stringify(body),
-    });
+    // 2A.12 per-call timeout: catches Grok-side hangs (trial-5 saw
+    // one 139-second hang on agentGenerateMessage that froze the
+    // NPC for ~2 min until ACTION_TIMEOUT fired). AbortController
+    // gives up after GROK_CALL_TIMEOUT_MS; the timeout error is
+    // flagged non-retryable so retryWithBackoff doesn't multiply
+    // total wall-time past ACTION_TIMEOUT.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), GROK_CALL_TIMEOUT_MS);
+    let result: Response;
+    try {
+      result = await fetch(config.url + '/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...AuthHeaders(),
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (e: any) {
+      clearTimeout(timeoutId);
+      if (e?.name === 'AbortError') {
+        throw {
+          retry: false, // see comment above — non-retryable to bound wall-time
+          error: new Error(
+            `Chat completion timed out after ${GROK_CALL_TIMEOUT_MS}ms (AbortController fired)`,
+          ),
+        };
+      }
+      // Network-level / DNS / other transport errors: retryable.
+      throw { retry: true, error: e };
+    }
+    clearTimeout(timeoutId);
     if (!result.ok) {
       const error = await result.text();
       console.error({ error });
