@@ -40,7 +40,6 @@ import {
   AFFECT_DELTA_DEADBAND,
   AFFECTION_HALFLIFE_MS,
   EMOTION_HALFLIFE_MS,
-  KNOWLEDGE_FACT_HISTORY_CAP,
   LT_GENERAL_INSTINCT_BUDGET_CHARS,
   LT_GENERAL_OPA_BUDGET_CHARS,
   OP_A_MAX_TOKENS,
@@ -53,7 +52,6 @@ import {
 } from './knowledgeFacts';
 import {
   computeFactWriteOp,
-  findExactDupInST,
   normalizeFact,
   OpAFactRaw,
   OpAResponseRaw,
@@ -293,9 +291,6 @@ type ApplyArg = {
    *  Array shape (not Record) to avoid Convex's non-ASCII-field-name
    *  serialization rejection on Chinese display names. */
   nameMap: Array<{ name: string; playerId: string }>;
-  /** Pre-LLM short-circuit hit: if non-null, just bump the row's freq
-   *  and skip Grok-style fact processing. */
-  shortCircuitFactId?: string | null;
 };
 
 export const applyOpAResult = internalMutation({
@@ -307,7 +302,6 @@ export const applyOpAResult = internalMutation({
     messageId: v.optional(v.id('messages')),
     response: v.any(),
     nameMap: v.any(),
-    shortCircuitFactId: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, rawArgs) => {
     const args = rawArgs as ApplyArg;
@@ -319,31 +313,12 @@ export const applyOpAResult = internalMutation({
       (args.nameMap ?? []).map((e: { name: string; playerId: string }) => [e.name, e.playerId]),
     );
 
-    // ── Pre-LLM short-circuit path: bump the matched ST row's
-    //    frequency + lastUpdatedAt; append history; skip the rest.
-    if (args.shortCircuitFactId) {
-      const row = await ctx.db.get(args.shortCircuitFactId as Id<'knowledgeFact'>);
-      if (row && row.tier === 'ST') {
-        const histEntry = args.messageId
-          ? { ts: now, src: { kind: 'msg' as const, messageId: args.messageId } }
-          : { ts: now, src: { kind: 'perception' as const, event: 'op-a-shortcircuit' } };
-        const nextHistory = [...row.history, histEntry].slice(-KNOWLEDGE_FACT_HISTORY_CAP);
-        await ctx.db.patch(row._id, {
-          frequency: row.frequency + 1,
-          lastUpdatedAt: now,
-          history: nextHistory,
-        });
-        return {
-          inserted: 0,
-          patched: 1,
-          refreshCopied: 0,
-          shortCircuited: true,
-          n24Refires: 0,
-          n24Skipped: 0,
-        };
-      }
-      // Otherwise fall through to normal processing.
-    }
+    // 2A.8 C3 fix: removed the pre-LLM exact-dup short-circuit. The
+    // short-circuit (plan §5.1 v3.4 option-b) was a perf optimization
+    // but as implemented it silently skipped the per-turn global
+    // affect update — repeated inputs (the most common manual test
+    // pattern) lost their emotion delta. Correctness > perf for the
+    // trial; re-enable later with a fix that preserves global affect.
 
     let inserted = 0;
     let patched = 0;
@@ -385,6 +360,18 @@ export const applyOpAResult = internalMutation({
         // floor in n24Scale skips negligible-magnitude applies.
         const scaled = n24Scale(plan.refireImpact);
         if (scaled.shouldRefire) {
+          // 2A.8 C2 fix: Grok emits display names (per N25/system-prompt
+          // discipline), not playerIds. Resolve `impact.targetEntity`
+          // through the same nameMap that resolves entity, so the
+          // per-target/owner-emotion routing works. Pre-fix, the
+          // string-compare display-name === playerId always failed
+          // and every refire was routed to owner emotion overwrite,
+          // burying per-target affection updates.
+          const rawTarget = plan.refireImpact!.targetEntity;
+          const resolvedTarget = rawTarget
+            ? resolveEntity(rawTarget, '', nameMap)
+            : null;
+          const routeToPerTarget = resolvedTarget === args.otherPlayerId;
           await applyN24Refire(ctx, {
             worldId: args.worldId,
             ownerPlayerId: args.ownerPlayerId,
@@ -392,6 +379,7 @@ export const applyOpAResult = internalMutation({
             targetPlayerId: args.otherPlayerId,
             impact: plan.refireImpact!,
             scaledIntensity: scaled.applied,
+            routeToPerTarget,
             now,
           });
           n24Refires++;
@@ -438,10 +426,11 @@ export const applyOpAResult = internalMutation({
  *  `scaledIntensity` is `intensity × confidence` (signed; preserves
  *  direction for affection-like signals).
  *
- *  Routing rule: if the impact's targetEntity matches the
- *  conversation's other player → apply to per-target affection.
- *  Otherwise (or if no target) → apply to owner emotion (label
- *  preserved; halflife = EMOTION_HALFLIFE_MS). */
+ *  Routing rule: `routeToPerTarget` is set by the caller after
+ *  resolving `impact.targetEntity` (a display name from Grok) through
+ *  the nameMap. When true → apply to per-target affection. When false
+ *  (or no target) → apply to owner emotion (label preserved; halflife
+ *  = EMOTION_HALFLIFE_MS). */
 async function applyN24Refire(
   ctx: any,
   args: {
@@ -451,6 +440,7 @@ async function applyN24Refire(
     targetPlayerId: string;
     impact: { label: string; targetEntity?: string | null; intensity: number; confidence: number };
     scaledIntensity: number;
+    routeToPerTarget: boolean;
     now: number;
   },
 ) {
@@ -461,9 +451,7 @@ async function applyN24Refire(
     )
     .first();
 
-  const isPerTarget =
-    args.impact.targetEntity && args.impact.targetEntity === args.targetPlayerId;
-  if (isPerTarget) {
+  if (args.routeToPerTarget) {
     const prev = mind?.affection;
     const prevValue = prev?.value ?? 0;
     const prevBaseline = prev?.baseline ?? 0;
@@ -585,24 +573,38 @@ async function applyGlobalAffect(
 // opAExtract — internalAction (LLM call + dispatch)
 // ─────────────────────────────────────────────────────────────────────
 
-/** Op A's Chinese system prompt (verbatim plan §5.1). */
+/** Op A's Chinese system prompt (plan §5.1, expanded per 2A.8 reviewer
+ *  C1 fix — Grok now sees row IDs in slice rendering AND is explicitly
+ *  taught the existingFactId → row-id mapping for the match-tree). */
 const OP_A_SYSTEM_PROMPT =
   '你在做"感知与记忆登记"。下面是这位角色刚获取的新输入（对话/见闻），以及她目前关于相关对象的短期(ST)和长期(LT)记忆切片。' +
-  '请抽取若干原子事实，并对每条判定其与已有记忆的关系：insert（新事实）/ exact（与已有完全相同）/ partial（与已有部分重叠，需要合并）/ lt-only（仅长期记忆中存在，需刷新到短期）。' +
+  '请抽取若干原子事实，并对每条判定其与已有记忆的关系：insert（新事实，已有切片中找不到任何相关条目）/ exact（与已有某条记忆完全相同，仅需提升频次）/ partial（与已有某条记忆部分重叠，需要合并文本）/ lt-only（仅长期记忆中存在，本次重新提起需刷新到短期）。' +
+  '【重要：决策与已有条目的链接方式】每条切片中的记忆条目都以 `[id=xxxxxxx, ST/LT, freq=N, imp=N]` 开头，其中 `xxxxxxx` 是该记忆在系统中的唯一标识。当你做出 exact / partial / lt-only 决策时，必须把对应条目的 `xxxxxxx` 字符串原样填入输出的 `existingFactId` 字段；做出 insert 决策时，`existingFactId` 设为 null。' +
+  '对 partial 与 lt-only 决策，请同时给出合并后的整段文本 `mergedFactText`（≤200字符），完整覆盖原文。' +
   '如该事实是对已有记忆的明显否证（如同一人姓名不一致），请把 `isContradiction` 置 true 并在合并文本中保留双方版本。' +
-  '同时给出该事实在登记时所唤起的情绪/好恶（写入 `affectImpact`），并给出 `confidence`（0~1，你对这个情绪判断的把握度——把握不大就给低分）。' +
+  '同时给出该事实在登记时所唤起的情绪/好恶（写入 `affectImpact`：{label, intensity (-1~1), confidence (0~1), targetEntity (对方的显示姓名或 null)}），把握不大就给低 confidence。' +
   '为每条事实给出 `importance`（1~5整数，5=刻骨铭心 / 4=印象深刻 / 3=值得记得 / 2=普通琐事 / 1=可有可无；一次性的震撼事件可以是5即便频次只有1，反之鸡毛蒜皮即便反复出现也是1）。' +
   '为每条事实给出 2–6 个中文短词关键词（≤16字），每个关键词附带一个 0~1 之间的关联强度数值（独立，非概率分布），表示该事实在以该关键词回想时会被想起的强度。' +
-  '对 `partial` / `lt-only` 决策，请直接给出合并后的关键词列表（你已在 `mergedFactText` 处做了文本合并；关键词同时合并即可）。' +
-  '仅输出中文。严格JSON，不要加任何说明文字。';
+  '对 `partial` / `lt-only` 决策，请直接给出合并后的关键词列表（已在 `mergedFactText` 处做了文本合并；关键词同时合并即可）。' +
+  '【全局情绪 affect 字段】最后输出本轮对话整体引起的情绪与好恶变化：{emotion: {label, intensity (0~1)} 或 null, affectionDelta: -1~1 或 0, targetEntity: 对方的显示姓名}。' +
+  '仅输出中文事实文本，严格JSON（顶层 {facts:[...], affect:{...}}）；不要加任何说明文字或代码块标记。';
 
 /** Render a knowledgeFact slice into a compact human-readable block for
- *  the Grok prompt. */
-function renderSliceForPrompt(label: string, rows: readonly KnowledgeFactView[]): string {
+ *  the Grok prompt. Per 2A.8 C1 fix: emits the row's `_id` so Grok can
+ *  reference it as `existingFactId` on `exact`/`partial`/`lt-only`
+ *  decisions. Without IDs in the prompt, the entire match-tree is
+ *  functionally dead because Grok has nothing to point at. */
+function renderSliceForPrompt(
+  label: string,
+  rows: readonly (KnowledgeFactView & { _id?: string })[],
+): string {
   if (!rows.length) return `${label}：（无）`;
   const lines = [`${label}：`];
   for (const r of rows) {
-    lines.push(`  - [${r.tier}, freq=${r.frequency}, imp=${r.importance}] ${r.factText ?? ''}`);
+    const id = r._id ?? '?';
+    lines.push(
+      `  - [id=${id}, ${r.tier}, freq=${r.frequency}, imp=${r.importance}] ${r.factText ?? ''}`,
+    );
   }
   return lines.join('\n');
 }
@@ -626,26 +628,11 @@ export const opAExtract = internalAction({
       return { ok: false, reason: 'no-message' as const };
     }
 
-    // Pre-LLM short-circuit (plan §5.1 v3.4 option b). If the latest
-    // message text is byte-identical to an existing ST per-target
-    // row, skip Grok entirely.
-    const stTargetForDup = context.perTargetSliceST as Array<
-      KnowledgeFactView & { _id: string }
-    >;
-    const shortCircuitId = findExactDupInST(context.lastMessage.text, stTargetForDup);
-    if (shortCircuitId) {
-      await ctx.runMutation(internal.agent.opA.applyOpAResult, {
-        worldId: args.worldId,
-        ownerPlayerId: args.ownerPlayerId,
-        ownerAgentId: args.ownerAgentId,
-        otherPlayerId: args.otherPlayerId,
-        messageId: args.messageId,
-        response: { facts: [], affect: undefined },
-        nameMap: context.nameMap,
-        shortCircuitFactId: shortCircuitId,
-      });
-      return { ok: true, shortCircuited: true } as const;
-    }
+    // 2A.8 C3 fix: pre-LLM short-circuit removed (see applyOpAResult
+    // comment). Repeated-input cases now eat a Grok call; that's
+    // acceptable while we don't yet have a way to preserve the global
+    // affect update through a short-circuit path. `findExactDupInST`
+    // remains exported from opAParse.ts for future re-enablement.
 
     // Assemble prompt.
     const recent = context.recentMessages
@@ -715,7 +702,6 @@ export const opAExtract = internalAction({
         messageId: args.messageId,
         response: parsed,
         nameMap: context.nameMap,
-        shortCircuitFactId: null,
       },
     );
 
