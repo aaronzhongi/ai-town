@@ -127,11 +127,18 @@ export const loadOpAContext = internalQuery({
     //    players. NPCs resolve via persona.bioName; PCs resolve via
     //    playerPersona.displayName (exact playerId match else default
     //    record).
+    //
+    // **Critical:** the map is returned as an ARRAY of {name,playerId}
+    // pairs rather than a Record<string,string>. Convex's query-return
+    // serializer rejects object keys containing non-ASCII characters
+    // (e.g., Chinese display names like '李平') — using an object map
+    // would crash loadOpAContext on every invocation in this codebase.
+    // Consumer (applyOpAResult / opAExtract) rebuilds the Map.
     const world = await ctx.db.get(args.worldId);
     if (!world) {
       return null;
     }
-    const nameMap: Record<string, string> = {};
+    const nameMapEntries: Array<{ name: string; playerId: string }> = [];
     const playerIdToName: Record<string, string> = {};
     for (const p of world.players) {
       const pd = await ctx.db
@@ -161,7 +168,7 @@ export const loadOpAContext = internalQuery({
         }
         displayName = surface?.displayName ?? pd.name;
       }
-      nameMap[displayName] = p.id;
+      nameMapEntries.push({ name: displayName, playerId: p.id });
       playerIdToName[p.id] = displayName;
     }
     const ownerDisplayName = playerIdToName[args.ownerPlayerId] ?? '?';
@@ -259,7 +266,7 @@ export const loadOpAContext = internalQuery({
       ownerDisplayName,
       otherDisplayName,
       ownerPersonality: ownerPersona?.personality ?? '',
-      nameMap,
+      nameMap: nameMapEntries, // array of {name, playerId} pairs — non-ASCII-key safe
       perTargetSliceST,
       perTargetSliceLT,
       generalSliceST,
@@ -282,8 +289,10 @@ type ApplyArg = {
   messageId?: Id<'messages'>;
   /** Parsed Grok response (post safeParseOpAResponse). */
   response: OpAResponseRaw;
-  /** Display-name → playerId map snapshotted from the query. */
-  nameMap: Record<string, string>;
+  /** Display-name → playerId entries snapshotted from the query.
+   *  Array shape (not Record) to avoid Convex's non-ASCII-field-name
+   *  serialization rejection on Chinese display names. */
+  nameMap: Array<{ name: string; playerId: string }>;
   /** Pre-LLM short-circuit hit: if non-null, just bump the row's freq
    *  and skip Grok-style fact processing. */
   shortCircuitFactId?: string | null;
@@ -303,7 +312,12 @@ export const applyOpAResult = internalMutation({
   handler: async (ctx, rawArgs) => {
     const args = rawArgs as ApplyArg;
     const now = Date.now();
-    const nameMap = new Map<string, string>(Object.entries(args.nameMap ?? {}));
+    // Rebuild Map from the {name, playerId}[] wire shape (see ApplyArg
+    // docstring — the array is used precisely to skip non-ASCII key
+    // serialization across the action/mutation boundary).
+    const nameMap = new Map<string, string>(
+      (args.nameMap ?? []).map((e: { name: string; playerId: string }) => [e.name, e.playerId]),
+    );
 
     // ── Pre-LLM short-circuit path: bump the matched ST row's
     //    frequency + lastUpdatedAt; append history; skip the rest.
