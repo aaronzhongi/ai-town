@@ -19,7 +19,18 @@ convex/behavior/
 ├── parseScenarios.test.ts  # jest: parser unit tests + live-spec validation
 ├── judge.ts                # LLM-judge helper (calls Grok with the rubric + reply)
 ├── judge.test.ts           # jest: judge unit tests (mocked fetch — no real LLM calls)
+├── lifecycle.ts            # 2B1 — runner-agnostic state machine (Port iface)
+├── lifecycleMutations.ts   # 2B1 — Convex internalMutation/Query primitives;
+│                           #       includes one test-only world-doc backdoor
+│                           #       (`forceParticipatingMutation`) that bypasses
+│                           #       walk-over + INVITE_ACCEPT_PROBABILITY —
+│                           #       justified in its docstring
+├── lifecycle.test.ts       # 2B1 — jest meta-test of the state machine (19 cases)
+├── orchestrator.ts         # 2B1 — internalAction `runScenario` + Convex Port
 └── README.md               # this file
+
+scripts/
+└── runBehaviorSuite.mjs    # 2B1 — Node runner: loads YAML, invokes action per scenario
 ```
 
 ## Schema (scenarios.yaml)
@@ -81,36 +92,72 @@ Covers:
 - Judge prompt assembly, JSON parsing, verdict tallying.
 - Judge orchestrator end-to-end (with mocked fetch — no LLM call).
 
-## Running the end-to-end suite (round 3 — NOT yet built)
+## Running the end-to-end suite (round 3 — B1 lifecycle landed, B2 scoring pending)
 
-The orchestrator that drives each scenario against a live Convex
-deployment is the **next-step deliverable** (separate commit). It will:
+Round-3 was split into B1 (lifecycle infrastructure) and B2 (judge
+integration + scoring + calibration persistence). **B1 is shipped**;
+B2 is the next commit.
 
-1. For each scenario in scenarios.yaml:
-   1. Reset the world to the scenario's initial state (per-scenario
-      setup hooks TBD — e.g., wipe + seed + send pre-conversation
-      messages from context prose).
-   2. Send the scenario's `input` as a PC message via writeMessage.
-   3. Wait for the NPC reply (poll the messages table for a new
-      message from the NPC player).
-   4. Call `judgeReply(scenario.rubric, npcReply)`.
-   5. Record pass/fail per scenario.
-2. Aggregate results + report.
+### What B1 delivers
 
-Why this is non-trivial:
-- Per-scenario world setup requires precise control of `mindState`,
-  `knowledgeFact`, and conversation state. Some scenarios depend on
-  prior conversations (e.g. B03 "name persists"). These setup hooks
-  need to be expressed alongside each scenario's data.
-- Async polling for the NPC reply — the engine processes input on its
-  own tick cadence. Need a timeout + heartbeat strategy.
-- Cost: each scenario invokes 2 LLM calls (NPC reply + judge). 8
-  scenarios × 2 = 16 calls per run. At $0.X per call this is fine
-  for nightly but not per-commit.
+`scripts/runBehaviorSuite.mjs` reads `scenarios.yaml` and drives each
+scenario through this lifecycle per `lifecycle.ts`:
 
-Recommended cadence once built:
-- Pre-commit: run the schema-validation jest (fast, free).
-- Nightly: run the full end-to-end suite.
+```
+RESET (wipe NPC↔PC knowledgeFact / mindState / messages, leave any prior conversation)
+  → Op A QUIESCENCE WAIT (drain pending opAExtract scheduled functions)
+  → CONVERSATION ESTABLISH (startConversation input + forceParticipating backdoor)
+  → SETUP HOOKS (knowledgeFactSeeds, priorMessages, mindStateInit — per scenario.setup)
+  → READ pre-snapshot of (NPC, PC) mindState
+  → TRIGGER (insert PC's input message + schedule Op A on NPC side)
+  → POLL for NPC reply (id-based, filtered by conversationId; 90s budget)
+  → Op A QUIESCENCE WAIT (drain post-reply Op A)
+  → READ post-snapshot of (NPC, PC) mindState
+  → emit raw artifacts (LifecycleResult JSON)
+```
+
+Invocation:
+```powershell
+node scripts/runBehaviorSuite.mjs                    # all scenarios (needs --confirm)
+node scripts/runBehaviorSuite.mjs --ids B01,B04      # filter (no --confirm needed for 1)
+node scripts/runBehaviorSuite.mjs --confirm          # ≥2 scenarios require this
+node scripts/runBehaviorSuite.mjs --dry-run          # print plan only
+```
+
+Under the hood, each scenario is dispatched as
+`npx convex run behavior/orchestrator:runScenario '{"scenario": {...}}'`
+which calls the `runScenario` internalAction → `runScenarioLifecycle`
+in `lifecycle.ts` → Convex-backed `Port` impl in `orchestrator.ts`.
+
+### What B1 does NOT yet do (B2 deliverables)
+
+1. **Judge wiring** — `judge.ts` exists but the lifecycle does NOT
+   call it yet. Results contain `npcReply.text` only, not pass/fail.
+2. **Deterministic scoring** — `preMindState` / `postMindState` are
+   captured but not compared against `scenario.deterministic` rules.
+3. **Calibration mode** — no re-run-the-judge-N-times path yet.
+4. **Calibration state persistence** — no per-scenario file/table
+   that records which scenarios have passed the gate.
+5. **Per-bullet agreement metric** — Lens-3 IMPORTANT #3 from the
+   B-plan review.
+6. **B06 unverifiable-action handling** — `expectedAction: walk-away`
+   and `npcViolenceUsed` cannot be evaluated without a body-action
+   log (P6, still deferred). B2 must explicitly mark these as
+   UNVERIFIABLE so they do not silently false-pass.
+
+Each is captured in either the action docstring or the methodology
+memory note. Once B2 lands, this section becomes "Running the suite
+in full" with per-scenario gate-status reporting.
+
+### Cost
+
+- B1 cadence: each scenario invokes 2 LLM calls (NPC reply + Op A on
+  the trigger turn). 8 scenarios × 2 = 16 calls per `--confirm` run.
+- B2 will add 1 judge call per scenario (full run = 24 calls) and
+  optionally N×judge calls per scenario in calibration mode.
+- Pre-commit: run the schema-validation jest (fast, free) — this is
+  `parseScenarios.test.ts` + `judge.test.ts` + `lifecycle.test.ts`.
+- Nightly (once B2 lands): run the full end-to-end suite.
 - Pre-release / before user-facing demo: run twice for stability.
 
 ## Why this exists
@@ -131,24 +178,36 @@ See:
   methodology principle + the "will replace per scenario once
   gated" rule (gates: orchestrator live + ≥0.9 judge stability).
 
-## Deferred from lens-2 audit (2A.13b)
+## Deferred from lens-2 audit (2A.13b) — status post-B1
 
-Round-2-fold lens-2 review flagged 7 items (P1–P7); 4 were folded
-into this commit (P1 self-containment for B03/B07, P3 promotion
-for B02, P4 internal-state routing for B04/B06/B07, P7 silent-leave
-for B06). The remaining 3 are deliberately deferred to the
-orchestrator commit because they only become testable then:
+Round-2-fold lens-2 review flagged 7 items (P1–P7). Status:
 
-- **P2 (calibration metric is a placeholder)** — the ≥0.9 judge
-  self-agreement bar is borrowed from rubric-grading literature.
-  Real cut should be set once the orchestrator produces actual
-  distribution data. Flagged in the memory note.
+- **P1 self-containment for B03/B07** — FOLDED in 2A.13b.
+- **P3 should→must for B02 politeness** — FOLDED in 2A.13b.
+- **P4 internal-state routing for B04/B06/B07** — FOLDED in 2A.13b
+  (deterministic channel schema added).
+- **P7 silent-leave for B06 split** — FOLDED in 2A.13b.
 - **P5 (per-scenario world-setup hooks not yet executable)** —
-  `setup.knowledgeFactSeeds`, `setup.priorMessages`,
-  `setup.mindStateInit` are reserved in the schema but no code
-  consumes them yet. Round-3 orchestrator will wire them.
-- **P6 (no deterministic mindState read helper)** — the
-  orchestrator needs a query that returns the (NPC, PC) mindState
-  row after a turn so `deterministic.affectionDelta` /
-  `emotionValueMin` can be checked. Helper TBD with the
-  orchestrator.
+  RESOLVED in 2B1. `applySetupHooksMutation` consumes
+  `knowledgeFactSeeds` (insert into knowledgeFact),
+  `priorMessages` (direct insert into messages — note the B1
+  limitation that conversation.lastMessage/numMessages are NOT
+  patched; revisit in B2 if a scenario needs it), and
+  `mindStateInit` (insert/patch the mindState row).
+- **P6 (deterministic mindState read helper)** — RESOLVED in 2B1.
+  `readMindStateQuery` returns the (NPC, PC) mindState row;
+  lifecycle snapshots pre/post for B2 deterministic scoring.
+- **P2 (calibration metric is a placeholder)** — STILL DEFERRED to
+  B2. The ≥0.9 judge self-agreement bar is borrowed from
+  rubric-grading literature. Real cut should be set once B2 lands
+  + the orchestrator produces actual distribution data.
+
+Open from this commit's reviewer pass:
+- **Op A failed/canceled state visibility** — `countPendingOpAQuery`
+  only counts `pending`+`inProgress`. If a scheduled Op A entered
+  `failed`/`canceled` state during a scenario, the lifecycle treats
+  it as quiesced and proceeds, but the post-snapshot may be
+  stale/missing rows. B2 should add a separate "Op A failures
+  observed" field to the result so deterministic scoring can route
+  around it (or fail the scenario outright if affect-bump checks
+  would mis-score).
