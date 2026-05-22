@@ -88,12 +88,60 @@ describe('safeParseOpAResponse', () => {
   test('malformed JSON inside braces → throws', () => {
     expect(() => safeParseOpAResponse('{not really json}')).toThrow(/JSON\.parse/);
   });
+
+  test('2A.10 Bug B — truncated mid-second-fact → recovers first fact', () => {
+    // Simulates Grok hitting OP_A_MAX_TOKENS partway through emitting
+    // the second fact in a batch. The recovery walker should find
+    // the end of fact 1 (depth-1 close), truncate there, append ]}.
+    const truncated =
+      '{"facts":[' +
+      '{"factText":"李平自称叫李平","decision":"insert","existingFactId":null,"importance":3,"affectImpact":null,"keywords":[]},' +
+      '{"factText":"李平说附近只有我们两个","decision":"insert","existingFactI';
+    const out = safeParseOpAResponse(truncated);
+    expect(out.facts).toHaveLength(1);
+    expect(out.facts?.[0]?.factText).toBe('李平自称叫李平');
+    expect(out.affect).toBeUndefined();
+  });
+
+  test('2A.10 Bug B — truncation mid-FIRST-fact (no recoverable facts) → throws', () => {
+    // No complete facts at depth 2 yet; recovery returns null;
+    // original "unclosed" error rethrown.
+    const veryTruncated =
+      '{"facts":[{"factText":"李平自称叫李平","decision":"insert","existingFactI';
+    expect(() => safeParseOpAResponse(veryTruncated)).toThrow(/unclosed/);
+  });
+
+  test('2A.10 Bug B — recovery preserves brace-counting through string-internal braces', () => {
+    // The factText contains literal `{` and `}` chars inside a JSON
+    // string. The string-aware walker must NOT count those as
+    // structural braces — otherwise it would mis-recover.
+    const truncated =
+      '{"facts":[' +
+      '{"factText":"李平说\\"{token}\\"是个谜","decision":"insert","existingFactId":null,"importance":2,"affectImpact":null,"keywords":[]},' +
+      '{"factText":"truncated';
+    const out = safeParseOpAResponse(truncated);
+    expect(out.facts).toHaveLength(1);
+    expect(out.facts?.[0]?.factText).toContain('{token}');
+  });
 });
 
 describe('normalizeFact', () => {
   test('passes raw factText through trim + char cap', () => {
     const out = normalizeFact({ factText: '  hello  ' });
     expect(out.factText).toBe('hello');
+  });
+
+  test('2A.10 Bug A — accepts `fact` as alias when `factText` is missing', () => {
+    // Trial-3 surfaced: Grok sometimes emits `fact` instead of
+    // `factText`. Pre-fix this dropped the entire entry via the
+    // `insert requires non-empty factText` throw downstream.
+    const out = normalizeFact({ fact: '李平自称叫李平' } as any);
+    expect(out.factText).toBe('李平自称叫李平');
+  });
+
+  test('2A.10 Bug A — `factText` takes precedence when both are present', () => {
+    const out = normalizeFact({ factText: 'spec-name', fact: 'alias-name' } as any);
+    expect(out.factText).toBe('spec-name');
   });
 
   test('passes keywords through N26 normalize', () => {

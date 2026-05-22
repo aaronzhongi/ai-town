@@ -237,7 +237,13 @@ export const OP_A_CONSISTENCY_CI_MAX_VECTORS = 12;
 // Op A LLM call bounds (temperature low for deterministic JSON output;
 // matches reflection's pattern). REFLECT_TEMPERATURE was 0.3; Op A
 // produces structured JSON so we keep deterministic output here.
-export const OP_A_MAX_TOKENS = 800;
+// 2A.10 (Bug B): bumped 800 → 1500. Trial-3 logs showed Grok hitting
+// the 800 ceiling mid-response (post-2A.8 prompt expansion + Grok's
+// verbose emission style with full affectImpact + keyword arrays).
+// safeParseOpAResponse now has a truncation-recovery walker as a
+// belt-and-suspenders backstop, but the token bump removes the
+// failure mode at source for typical-size batches (2-5 facts).
+export const OP_A_MAX_TOKENS = 1500;
 export const OP_A_TEMPERATURE = 0.2;
 
 // Op A scheduling — minimum elapsed time after the prior Op A

@@ -38,6 +38,9 @@ export type OpAFactRaw = {
   entity?: string;
   entityDisplayName?: string;
   factText?: string;
+  /** 2A.10: Grok occasionally emits `fact` instead of `factText`
+   *  (trial-3 surfaced — defensive alias per Bug A). */
+  fact?: string;
   decision?: OpADecision;
   existingFactId?: string | null;
   isContradiction?: boolean;
@@ -67,7 +70,12 @@ export type OpAResponseRaw = {
  *   - Leading / trailing prose around the JSON object
  *   - Missing `facts` array (defaults to `[]`)
  *   - Missing `affect` block (defaults to undefined)
- * Throws only when the content has no parseable `{ … }` substring.
+ *   - **2A.10 Bug B**: truncated mid-response (e.g. OP_A_MAX_TOKENS
+ *     hit). Recovery walker finds the last complete fact at facts-
+ *     array depth, truncates to that point + closes the JSON. Yields
+ *     N-1 facts instead of dropping the entire batch.
+ * Throws only when the content has no parseable `{ … }` substring AND
+ * the recovery walker can't find any complete fact either.
  */
 export function safeParseOpAResponse(content: string): OpAResponseRaw {
   if (typeof content !== 'string' || content.trim() === '') {
@@ -78,28 +86,61 @@ export function safeParseOpAResponse(content: string): OpAResponseRaw {
   const fenceMatch = stripped.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   if (fenceMatch) stripped = fenceMatch[1].trim();
 
-  // Find the first `{` and the matching closing `}` by brace counting.
-  // Safe for nested objects; not safe inside strings — accept the
-  // residual risk: Grok emits structured JSON; pathological-string
-  // contents would be a separate prompt-engineering problem.
+  // Find the first `{` and the matching closing `}` by brace counting
+  // (string-aware). Safe for nested objects + braces inside strings.
   const start = stripped.indexOf('{');
   if (start < 0) throw new Error('Op A: no JSON object found in response');
+
+  const fullEnd = findMatchingBrace(stripped, start);
+  if (fullEnd >= 0) {
+    // Happy path: closed JSON object found.
+    return parseOpAObject(stripped.slice(start, fullEnd + 1));
+  }
+
+  // 2A.10 Bug B recovery: trial-3 showed Grok hitting OP_A_MAX_TOKENS
+  // mid-response, leaving the JSON unclosed. Walk the string at
+  // facts-array depth (=2 inside the outer object's `facts: [...]`),
+  // find the last complete fact's closing `}`, truncate + close.
+  const recovered = tryRecoverTruncatedOpA(stripped.slice(start));
+  if (recovered !== null) {
+    console.warn(
+      '[Op A safeParse] recovered from truncated response — used the last complete fact set',
+    );
+    return recovered;
+  }
+  throw new Error('Op A: unclosed JSON object in response');
+}
+
+/** String-aware brace matcher. Returns the index of the matching `}`
+ *  for the `{` at `start`, or -1 if unclosed. */
+function findMatchingBrace(s: string, start: number): number {
   let depth = 0;
-  let end = -1;
-  for (let i = start; i < stripped.length; i++) {
-    const ch = stripped[i];
-    if (ch === '{') depth++;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (inString) {
+      if (ch === '\\') escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
     else if (ch === '}') {
       depth--;
-      if (depth === 0) {
-        end = i;
-        break;
-      }
+      if (depth === 0) return i;
     }
   }
-  if (end < 0) throw new Error('Op A: unclosed JSON object in response');
+  return -1;
+}
 
-  const jsonStr = stripped.slice(start, end + 1);
+/** Common post-parse normalization for an already-extracted JSON
+ *  object string. Validates top-level shape + defaults missing fields. */
+function parseOpAObject(jsonStr: string): OpAResponseRaw {
   let parsed: any;
   try {
     parsed = JSON.parse(jsonStr);
@@ -109,13 +150,63 @@ export function safeParseOpAResponse(content: string): OpAResponseRaw {
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Op A: parsed JSON is not an object');
   }
-
-  // Normalize the shape (defensive: ensure `facts` is an array; the
-  // per-fact normalization happens in `normalizeFact`).
   const facts = Array.isArray(parsed.facts) ? parsed.facts : [];
   const affect =
     parsed.affect && typeof parsed.affect === 'object' ? parsed.affect : undefined;
   return { facts, affect };
+}
+
+/**
+ * 2A.10 Bug B truncated-response recovery. The input starts with the
+ * opening `{` of the top-level Op A response. Walks the string
+ * (string-aware), tracks brace depth, and finds the last position
+ * where depth == 1 right AFTER closing `}` (i.e., the end of a
+ * complete fact object inside `facts: [`). Truncates to that point
+ * and appends `]}` to close the facts array + outer object.
+ *
+ * Returns the parsed OpAResponseRaw on success, or null when no
+ * recovery is possible (e.g., truncation hit before even one
+ * complete fact closed, or the brace-walk never reached depth 2).
+ */
+function tryRecoverTruncatedOpA(s: string): OpAResponseRaw | null {
+  if (s.length === 0 || s[0] !== '{') return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let lastFactEnd = -1; // index of `}` that closed a fact at depth-2
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (inString) {
+      if (ch === '\\') escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      // depth was 2 (inside facts:[...] then inside a fact object) and
+      // we just closed → now at depth 1. That's the end of a fact.
+      if (depth === 1) lastFactEnd = i;
+    }
+  }
+  if (lastFactEnd < 0) return null;
+
+  // Build the recovered JSON: everything up through the last complete
+  // fact, then close the facts array + outer object. Affect block is
+  // lost when the response was truncated mid-facts (Grok hadn't
+  // emitted it yet — accept this; better partial than nothing).
+  const truncated = s.slice(0, lastFactEnd + 1);
+  const recovered = `${truncated}]}`;
+  try {
+    return parseOpAObject(recovered);
+  } catch {
+    return null;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -171,7 +262,10 @@ export function normalizeFact(raw: OpAFactRaw): OpAFactNormalized {
   return {
     entityDisplayName: (raw.entityDisplayName ?? '').trim(),
     entityRaw: (raw.entity ?? '').trim(),
-    factText: trimFactText(raw.factText),
+    // 2A.10 Bug A fix: trial-3 logs showed Grok occasionally emits
+    // `fact` instead of `factText`. Accept both; factText takes
+    // precedence when both are present (the documented spec name).
+    factText: trimFactText(raw.factText ?? raw.fact),
     decision,
     existingFactId: raw.existingFactId ?? null,
     isContradiction: !!raw.isContradiction,

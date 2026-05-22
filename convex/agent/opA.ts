@@ -641,7 +641,9 @@ const OP_A_SYSTEM_PROMPT =
   '为每条事实给出 2–6 个中文短词关键词（≤16字），每个关键词附带一个 0~1 之间的关联强度数值（独立，非概率分布），表示该事实在以该关键词回想时会被想起的强度。' +
   '对 `partial` / `lt-only` 决策，请直接给出合并后的关键词列表（已在 `mergedFactText` 处做了文本合并；关键词同时合并即可）。' +
   '【全局情绪 affect 字段】最后输出本轮对话整体引起的情绪与好恶变化：{emotion: {label, intensity (0~1)} 或 null, affectionDelta: -1~1 或 0, targetEntity: 对方的显示姓名}。' +
-  '仅输出中文事实文本，严格JSON（顶层 {facts:[...], affect:{...}}）；不要加任何说明文字或代码块标记。';
+  '【输出格式严格示例】（JSON 键名 ASCII；值中的事实/标签/关键词使用中文；不要加代码块标记或说明文字）：' +
+  '{"facts":[{"factText":"李平自我介绍说他叫李平","entity":"__general__","entityDisplayName":"李平","decision":"insert","existingFactId":null,"isContradiction":false,"mergedFactText":null,"importance":3,"affectImpact":{"label":"谨慎好奇","intensity":0.3,"confidence":0.6,"targetEntity":"李平"},"keywords":[{"keyword":"姓名","assocRatio":0.8},{"keyword":"陌生","assocRatio":0.6}]}],"affect":{"emotion":{"label":"谨慎","intensity":0.4},"affectionDelta":0.1,"targetEntity":"李平"}}。' +
+  '严格使用上例的键名 `factText`（不是 `fact`）、`existingFactId`、`mergedFactText`、`affectImpact`。仅输出 JSON 本身，无任何说明文字。';
 
 /** Render a knowledgeFact slice into a compact human-readable block for
  *  the Grok prompt. Per 2A.8 C1 fix: emits the row's `_id` so Grok can
