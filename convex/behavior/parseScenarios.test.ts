@@ -214,4 +214,47 @@ describe('live spec — convex/behavior/scenarios.yaml', () => {
       expect((s?.userCommentR1 ?? '').trim().length).toBeGreaterThan(20);
     }
   });
+
+  test('2A.13b lens-2 fold — B06 silent-leave uses deterministic.expectedAction not rubric', () => {
+    // The LLM judge cannot score "physically left without speaking"
+    // from an empty reply string. Lens-2 P7 required moving this
+    // assertion to the deterministic channel.
+    const b06 = file.scenarios.find((s) => s.id === 'B06');
+    expect(b06).toBeDefined();
+    expect(b06?.deterministic?.expectedAction).toBe('walk-away');
+    expect(b06?.deterministic?.npcViolenceUsed).toBe(false);
+  });
+
+  test('2A.13b lens-2 fold — B04 compliment-affect bump on deterministic channel', () => {
+    // Internal-state assertions (mindState.affection bump) live on
+    // the deterministic channel, not rubric.should — the LLM judge
+    // cannot observe mindState from the reply text.
+    const b04 = file.scenarios.find((s) => s.id === 'B04');
+    expect(b04?.deterministic?.affectionDelta).toEqual({
+      sign: 'positive',
+      magnitude: 'small',
+    });
+  });
+
+  test('2A.13b lens-2 fold — B03 self-containment: must-bullet pins the recognized-name case', () => {
+    // Pre-fix B03 had `must: 把对方当作认识的人对待` — unverifiable
+    // from reply alone. Post-fix: must bullet explicitly requires
+    // either the name or an "again-meeting" temporal marker.
+    const b03 = file.scenarios.find((s) => s.id === 'B03');
+    const mustText = (b03?.rubric.must ?? []).join('\n');
+    // Either "李平" or "又见面了" / "你又来了" should appear in the
+    // rubric's first MUST bullet's example string — making the
+    // judgement concrete.
+    expect(mustText).toMatch(/李平|又见面|你又来/);
+  });
+
+  test('2A.13b lens-2 fold — B07 self-containment: must-bullet pins the prior-name match', () => {
+    const b07 = file.scenarios.find((s) => s.id === 'B07');
+    const mustText = (b07?.rubric.must ?? []).join('\n');
+    // The MUST bullet should require BOTH the prior name AND a
+    // temporal marker so the judge can verify the reply actually
+    // referenced the contradiction.
+    expect(mustText).toMatch(/李平/);
+    expect(mustText).toMatch(/刚才|先前|方才|之前/);
+  });
 });

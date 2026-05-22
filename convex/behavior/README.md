@@ -1,11 +1,14 @@
 # Memory v3.5 — Behavioral Test Suite
 
 **Purpose:** codified, automated validation of Memory v3.5's behavioral
-contracts. Once a scenario is in this suite, Claude is responsible for
-running the suite + fixing regressions WITHOUT requiring a user trial
-for that specific behavior. User trials are reserved for novel
-scenarios, exploration, and end-to-end pre-release smoke tests — NOT
-routine validation. See memory note `behavioral-test-methodology.md`.
+contracts. The principle is that this suite WILL REPLACE routine
+user-trial validation for any scenario once two conditions are met:
+(1) the round-3 end-to-end orchestrator is built (currently NOT yet
+built — see §"Running the end-to-end suite" below), and (2) a
+calibration run shows ≥0.9 judge self-agreement across 3 repeated
+runs of the same reply for that scenario. Until both gate, the suite
+SUPPLEMENTS user-trial validation but does not yet replace it. See
+memory note `behavioral-test-methodology.md` for the principle.
 
 ## Files
 
@@ -125,4 +128,27 @@ See:
   draft (includes internal-invariant rows that were stripped before
   user review).
 - `~/.claude/.../memory/behavioral-test-methodology.md` — the
-  methodology principle + the "REPLACES user-trial" rule.
+  methodology principle + the "will replace per scenario once
+  gated" rule (gates: orchestrator live + ≥0.9 judge stability).
+
+## Deferred from lens-2 audit (2A.13b)
+
+Round-2-fold lens-2 review flagged 7 items (P1–P7); 4 were folded
+into this commit (P1 self-containment for B03/B07, P3 promotion
+for B02, P4 internal-state routing for B04/B06/B07, P7 silent-leave
+for B06). The remaining 3 are deliberately deferred to the
+orchestrator commit because they only become testable then:
+
+- **P2 (calibration metric is a placeholder)** — the ≥0.9 judge
+  self-agreement bar is borrowed from rubric-grading literature.
+  Real cut should be set once the orchestrator produces actual
+  distribution data. Flagged in the memory note.
+- **P5 (per-scenario world-setup hooks not yet executable)** —
+  `setup.knowledgeFactSeeds`, `setup.priorMessages`,
+  `setup.mindStateInit` are reserved in the schema but no code
+  consumes them yet. Round-3 orchestrator will wire them.
+- **P6 (no deterministic mindState read helper)** — the
+  orchestrator needs a query that returns the (NPC, PC) mindState
+  row after a turn so `deterministic.affectionDelta` /
+  `emotionValueMin` can be checked. Helper TBD with the
+  orchestrator.

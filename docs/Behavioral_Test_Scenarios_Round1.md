@@ -1,5 +1,13 @@
 # Memory v3.5 — Behavioral Test Scenarios, Round 1
 
+> **HISTORICAL — superseded by `convex/behavior/scenarios.yaml` as of
+> 2A.13b (2026-05-22).** This file is the round-1 draft kept for
+> audit/provenance only. Lens-2 of the round-2 fold split ~25% of
+> these rubric bullets into a separate `deterministic` channel
+> (DB-checked, not LLM-judged) and added per-scenario `setup` hooks
+> for the orchestrator. Edit the YAML, not this MD — the YAML is
+> the live spec and is schema-validated by jest.
+
 **Methodology:** see memory note `behavioral-test-methodology.md`. Two-tier
 evaluation: the **deterministic tier** (matches what the unit tests cover —
 ~100 unit tests in `convex/agent/*.test.ts` already pin those contracts) and
