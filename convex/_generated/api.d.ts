@@ -49,6 +49,7 @@ import type * as behavior_lifecycle from "../behavior/lifecycle.js";
 import type * as behavior_lifecycleMutations from "../behavior/lifecycleMutations.js";
 import type * as behavior_orchestrator from "../behavior/orchestrator.js";
 import type * as behavior_parseScenarios from "../behavior/parseScenarios.js";
+import type * as behavior_scoring from "../behavior/scoring.js";
 import type * as constants from "../constants.js";
 import type * as crons from "../crons.js";
 import type * as engine_abstractGame from "../engine/abstractGame.js";
@@ -117,6 +118,7 @@ declare const fullApi: ApiFromModules<{
   "behavior/lifecycleMutations": typeof behavior_lifecycleMutations;
   "behavior/orchestrator": typeof behavior_orchestrator;
   "behavior/parseScenarios": typeof behavior_parseScenarios;
+  "behavior/scoring": typeof behavior_scoring;
   constants: typeof constants;
   crons: typeof crons;
   "engine/abstractGame": typeof engine_abstractGame;

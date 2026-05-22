@@ -2,23 +2,28 @@
 // Port binding.
 //
 // This module is a thin wrapper over the runner-agnostic state machine
-// in `lifecycle.ts`. It exposes ONE internalAction
-// (`runScenarioLifecycle`) that takes a single scenario object as args
-// and drives the full lifecycle, returning the raw artifacts as JSON.
+// in `lifecycle.ts` plus the scoring layer in `scoring.ts`. Exposes
+// two internalActions (B2 surface):
 //
-// The Node-side runner `scripts/runBehaviorSuite.mjs` is responsible
-// for loading scenarios.yaml and invoking this action per scenario
-// (via `npx convex run`). Keeping the YAML out of the Convex runtime
-// means no filesystem dependency and no schema-generation step.
+//   - `runScenario` — lifecycle + ONE judge call + scoring → scored
+//     result. Default operator entry point.
+//   - `judgeOnly` — single judge call on a fixed (rubric, reply) pair.
+//     Used by the runner to amortize calibration's N judge calls
+//     across separate Convex actions (a single action would exceed
+//     ACTION_TIMEOUT=120s with N=5 serial Grok roundtrips —
+//     Plan-Lens 2 BLOCKING #1).
 //
-// Scoring + judge integration are deferred to B2 — this action returns
-// raw artifacts only.
+// The Node-side runner `scripts/runBehaviorSuite.mjs` loads
+// scenarios.yaml, invokes `runScenario` once per scenario, and for
+// calibration mode invokes `judgeOnly` an additional (N-1) times
+// against the same cached `npcReply.text`. The lifecycle runs ONCE
+// per scenario in all modes — Plan-Lens 2 BLOCKING #2 contract.
 
 import { v } from 'convex/values';
 import { internalAction } from '../_generated/server';
 import { internal } from '../_generated/api';
 import { Id } from '../_generated/dataModel';
-import type { Scenario } from './parseScenarios';
+import type { Scenario, Rubric } from './parseScenarios';
 import {
   Port,
   LifecycleOpts,
@@ -27,6 +32,15 @@ import {
   MindStateSnapshot,
   runScenarioLifecycle,
 } from './lifecycle';
+import { judgeReply, JudgeResult } from './judge';
+import {
+  aggregateScenarioVerdict,
+  ScenarioVerdict,
+  computeSelfAgreement,
+  buildCalibrationEntry,
+  hashRubric,
+  CalibrationEntry,
+} from './scoring';
 
 // ─────────────────────────────────────────────────────────────────────
 // Convex-backed Port
@@ -258,28 +272,126 @@ function sleep(ms: number): Promise<void> {
 // Entry-point action
 // ─────────────────────────────────────────────────────────────────────
 
-/** Run one behavioral scenario end-to-end against the default world.
+/** Combined result of one scored scenario run: the raw lifecycle
+ *  artifacts + the single judge run + the aggregated verdict. The
+ *  Node runner caches `lifecycleResult.npcReply.text` from this
+ *  result and reuses it for any additional `judgeOnly` calls in
+ *  calibration mode. */
+export type ScoredScenarioResult = {
+  lifecycleResult: LifecycleResult;
+  judgeResult: JudgeResult | null;
+  judgeError: string | null;
+  verdict: ScenarioVerdict;
+};
+
+/** Run one behavioral scenario end-to-end against the default world,
+ *  with judge + scoring applied.
  *
  *  Invocation (operator-facing):
  *    npx convex run behavior/orchestrator:runScenario '{"scenario": {...}}'
  *
- *  The scripts/runBehaviorSuite.mjs Node helper loads scenarios.yaml,
- *  iterates, and calls this action per scenario.
+ *  Pipeline: lifecycle → judge (1 call) → scoring → ScoredScenarioResult.
+ *  For calibration mode (N>1 judge calls), the Node runner calls this
+ *  ONCE per scenario then calls `judgeOnly` (N-1) more times against
+ *  the cached `npcReply.text`.
  *
- *  Returns a `LifecycleResult` JSON. status='ok' means lifecycle ran
- *  cleanly + raw artifacts captured; status='error' means a specific
- *  step failed (see error.step). B2 will consume these artifacts to
- *  produce pass/fail verdicts via the judge + deterministic checks.
+ *  Verdict aggregation order (scoring.aggregateScenarioVerdict):
+ *  lifecycle-error → judge-error → rubric-fail → deterministic-fail →
+ *  unverifiable-skipped → pass. The rubric channel beats unverifiable
+ *  per Plan-Lens 1 BLOCKING #1 — this is the B06 honesty fix.
  */
 export const runScenario = internalAction({
   args: {
     scenario: v.any(),
     opts: v.optional(v.any()),
   },
-  handler: async (ctx, args): Promise<LifecycleResult> => {
+  handler: async (ctx, args): Promise<ScoredScenarioResult> => {
     const port = createConvexPort(ctx);
     const scenario = args.scenario as Scenario;
     const opts = (args.opts ?? {}) as LifecycleOpts;
-    return await runScenarioLifecycle(port, scenario, opts);
+    const lifecycleResult = await runScenarioLifecycle(port, scenario, opts);
+
+    // Judge call — only attempt if lifecycle produced an NPC reply.
+    let judgeResult: JudgeResult | null = null;
+    let judgeError: Error | null = null;
+    if (lifecycleResult.status === 'ok' && lifecycleResult.npcReply) {
+      try {
+        judgeResult = await judgeReply(scenario.rubric, lifecycleResult.npcReply.text);
+      } catch (e) {
+        judgeError = e instanceof Error ? e : new Error(String(e));
+      }
+    }
+
+    const verdict = aggregateScenarioVerdict(scenario, lifecycleResult, judgeResult, judgeError);
+
+    return {
+      lifecycleResult,
+      judgeResult,
+      judgeError: judgeError ? judgeError.message : null,
+      verdict,
+    };
+  },
+});
+
+/** Judge a fixed (rubric, replyText) pair without running the
+ *  lifecycle. Used by the runner for calibration mode: after one
+ *  `runScenario` call captures the NPC reply, additional `judgeOnly`
+ *  calls re-judge the SAME reply to measure judge self-agreement
+ *  (Plan-Lens 2 BLOCKING #2 contract — same reply, N judge runs).
+ *
+ *  Each call is its own Convex action so the per-action timeout
+ *  (ACTION_TIMEOUT=120s) is not breached by serial N=5 judge calls. */
+export const judgeOnly = internalAction({
+  args: {
+    rubric: v.any(),
+    replyText: v.string(),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ judgeResult: JudgeResult | null; judgeError: string | null }> => {
+    try {
+      const judgeResult = await judgeReply(args.rubric as Rubric, args.replyText);
+      return { judgeResult, judgeError: null };
+    } catch (e) {
+      return { judgeResult: null, judgeError: e instanceof Error ? e.message : String(e) };
+    }
+  },
+});
+
+/** Compute a CalibrationEntry from a scenario + N judge runs + the
+ *  latest verdict. Exposed as an action so the Node runner doesn't
+ *  need to import scoring.ts (which Node can't load directly without
+ *  a TypeScript loader). Pure-logic delegation; no LLM call. */
+export const computeCalibrationFromRuns = internalAction({
+  args: {
+    scenario: v.any(),
+    judgeRuns: v.any(), // JudgeResult[]
+    verdict: v.any(), // ScenarioVerdict
+    judgeModel: v.string(),
+  },
+  handler: async (ctx, args): Promise<CalibrationEntry> => {
+    const judgeRuns = args.judgeRuns as JudgeResult[];
+    const verdict = args.verdict as ScenarioVerdict;
+    const scenario = args.scenario as Scenario;
+    const selfAgreement = computeSelfAgreement(judgeRuns);
+    const rubricHash = await hashRubric(scenario.rubric);
+    return buildCalibrationEntry({
+      selfAgreement,
+      latestVerdict: verdict,
+      judgeModel: args.judgeModel,
+      rubricHash,
+    });
+  },
+});
+
+/** Compute the SHA-256 rubric hash for a given rubric. Exposed as an
+ *  action so the Node runner can detect rubric drift against stored
+ *  calibration entries without needing a TypeScript loader. */
+export const computeRubricHash = internalAction({
+  args: { rubric: v.any() },
+  handler: async (ctx, args): Promise<{ hash: string }> => {
+    const hash = await hashRubric(args.rubric as Rubric);
+    return { hash };
   },
 });

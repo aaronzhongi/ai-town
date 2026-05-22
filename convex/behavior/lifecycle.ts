@@ -192,13 +192,22 @@ export type LifecycleResult = {
   npcReply?: { messageId: string; text: string; creationTime: number };
   preMindState?: MindStateSnapshot;
   postMindState?: MindStateSnapshot;
-  /** Op A failure observability (B1 Lens-B IMPORTANT #3). Sums failed
-   *  and canceled Op A scheduled-function entries observed during
-   *  quiescence waits (both pre-trigger and post-reply). B2 should
-   *  treat non-zero values as a signal that postMindState may be
-   *  stale/missing and route deterministic scoring accordingly
-   *  (e.g., refuse to pass `affectionDelta` checks when failures > 0). */
-  opAFailuresObserved?: { failed: number; canceled: number };
+  /** Op A failure observability (B1 Lens-B IMPORTANT #3; refined in
+   *  B2 per Plan-Lens 1 IMPORTANT #5 — split pre vs post).
+   *
+   *  `pre` = failures observed during the pre-trigger quiescence wait
+   *  (orphaned Op A from the prior scenario). These do NOT invalidate
+   *  the post-trigger snapshot, since the trigger turn's own Op A is
+   *  independent. Captured for diagnostic visibility only.
+   *
+   *  `post` = failures observed during the post-reply quiescence wait
+   *  (Op A on the trigger turn itself crashed or timed out). These DO
+   *  invalidate the post-snapshot — affect deltas and emotion-floor
+   *  checks become unverifiable per scoring.evaluateDeterministic. */
+  opAFailuresObserved?: {
+    pre: { failed: number; canceled: number };
+    post: { failed: number; canceled: number };
+  };
   /** Timings per step in ms (since lifecycle start). Useful for
    *  diagnosing slow steps. */
   timings?: Partial<Record<LifecycleErrorStep | 'lifecycle', number>>;
@@ -272,14 +281,18 @@ export async function runScenarioLifecycle(
   // to drain before continuing. We log a warning on timeout but
   // continue — preferable to failing the whole scenario, since the
   // RESET already wiped what would have been orphaned.
-  let opAFailures = { failed: 0, canceled: 0 };
+  //
+  // Failures here are pre-trigger — orphans from a prior scenario.
+  // They do NOT invalidate this scenario's post-snapshot.
+  let opAFailuresPre = { failed: 0, canceled: 0 };
+  let opAFailuresPost = { failed: 0, canceled: 0 };
   const q1 = await port.waitForOpAQuiescence({
     npcPlayerId: actors.npcPlayerId,
     timeoutMs: o.opAQuiescenceTimeoutMs,
     pollIntervalMs: o.pollIntervalMs,
   });
-  opAFailures.failed += q1.failed;
-  opAFailures.canceled += q1.canceled;
+  opAFailuresPre.failed += q1.failed;
+  opAFailuresPre.canceled += q1.canceled;
   stamp('op-a-quiescence');
   if (!q1.quiesced) {
     // Best-effort second reset to catch any rows that landed during
@@ -369,13 +382,16 @@ export async function runScenarioLifecycle(
   }
 
   // ── Wait for Op A on the reply turn to settle, then snapshot ────
+  // Failures here are post-reply — Op A for the trigger turn itself
+  // crashed or timed out. These INVALIDATE the post-snapshot for any
+  // mindState-reading deterministic check (see scoring.ts).
   const q2 = await port.waitForOpAQuiescence({
     npcPlayerId: actors.npcPlayerId,
     timeoutMs: o.opAQuiescenceTimeoutMs,
     pollIntervalMs: o.pollIntervalMs,
   });
-  opAFailures.failed += q2.failed;
-  opAFailures.canceled += q2.canceled;
+  opAFailuresPost.failed += q2.failed;
+  opAFailuresPost.canceled += q2.canceled;
 
   let postMindState: MindStateSnapshot = null;
   try {
@@ -400,7 +416,7 @@ export async function runScenarioLifecycle(
     npcReply: reply,
     preMindState,
     postMindState,
-    opAFailuresObserved: opAFailures,
+    opAFailuresObserved: { pre: opAFailuresPre, post: opAFailuresPost },
     timings,
   };
 }

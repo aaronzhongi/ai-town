@@ -325,19 +325,28 @@ describe('runScenarioLifecycle — per-step failure modes', () => {
   });
 });
 
-describe('runScenarioLifecycle — Op A failure observability (Lens-B IMPORTANT #3)', () => {
-  test('opAFailuresObserved sums failed + canceled across both quiescence waits', async () => {
-    // Both quiescence waits return failed=2, canceled=1 → summed = 4 + 2.
+describe('runScenarioLifecycle — Op A failure observability (Lens-B IMPORTANT #3 + B2 split)', () => {
+  test('opAFailuresObserved splits pre vs post (B2 Plan-Lens 1 IMPORTANT #5)', async () => {
+    // Both quiescence waits return failed=2, canceled=1. The pre and
+    // post buckets are recorded separately so scoring can route
+    // pre-trigger failures (don't invalidate post-snapshot) vs
+    // post-reply failures (do invalidate it).
     const port = makeMockPort({ opAFailedPerCall: 2, opACanceledPerCall: 1 });
     const result = await runScenarioLifecycle(port, baseScenario, FAST_OPTS);
     expect(result.status).toBe('ok');
-    expect(result.opAFailuresObserved).toEqual({ failed: 4, canceled: 2 });
+    expect(result.opAFailuresObserved).toEqual({
+      pre: { failed: 2, canceled: 1 },
+      post: { failed: 2, canceled: 1 },
+    });
   });
 
   test('opAFailuresObserved is zero on clean run', async () => {
     const port = makeMockPort();
     const result = await runScenarioLifecycle(port, baseScenario, FAST_OPTS);
-    expect(result.opAFailuresObserved).toEqual({ failed: 0, canceled: 0 });
+    expect(result.opAFailuresObserved).toEqual({
+      pre: { failed: 0, canceled: 0 },
+      post: { failed: 0, canceled: 0 },
+    });
   });
 });
 
