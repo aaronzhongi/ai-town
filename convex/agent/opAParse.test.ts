@@ -231,6 +231,93 @@ describe('computeFactWriteOp — exact (N27 monotonic rise + N26 merge)', () => 
     );
   });
 
+  test('2A.9 fix — `exact` re-fires the STORED affectImpact when LLM omits a fresh one', () => {
+    // Pre-fix (R1 Lens-1 I-1 finding): refireImpact was always
+    // fact.affectImpact; on exact re-encounter Grok rarely re-asserts
+    // affect, so re-fires silently skipped — "fact feels dead on
+    // repeat exposure." Post-fix: fall back to stored impact.
+    const fact = normalizeFact({ decision: 'exact', affectImpact: null });
+    const storedImpact = {
+      label: '不安',
+      intensity: 0.6,
+      confidence: 0.7,
+      targetEntity: 'p:other',
+    };
+    const existing = existingRow({ affectImpact: storedImpact });
+    const result = computeFactWriteOp({
+      fact,
+      resolvedEntity: 'p:other',
+      existing,
+      owner: { playerId: 'p:0', agentId: 'a:0' },
+      now: 5000,
+    });
+    expect(result.refireImpact).toEqual(storedImpact);
+    // Patch's affectImpact is also the stored impact (re-applied).
+    if (result.write.kind !== 'patch') throw new Error();
+    expect(result.write.patch.affectImpact).toEqual(storedImpact);
+  });
+
+  test('2A.9 fix — `exact` LLM-fresh affectImpact still wins when provided', () => {
+    const fact = normalizeFact({
+      decision: 'exact',
+      affectImpact: { label: '喜悦', intensity: 0.4, confidence: 0.8 },
+    });
+    const existing = existingRow({
+      affectImpact: { label: '不安', intensity: 0.6, confidence: 0.7 },
+    });
+    const result = computeFactWriteOp({
+      fact,
+      resolvedEntity: 'p:other',
+      existing,
+      owner: { playerId: 'p:0', agentId: 'a:0' },
+      now: 5000,
+    });
+    expect(result.refireImpact?.label).toBe('喜悦'); // fact wins
+    if (result.write.kind !== 'patch') throw new Error();
+    expect((result.write.patch.affectImpact as any)?.label).toBe('喜悦');
+  });
+
+  test('2A.9 fix — `exact` with no fact AND no stored affectImpact → refireImpact = null', () => {
+    const fact = normalizeFact({ decision: 'exact', affectImpact: null });
+    const existing = existingRow({ affectImpact: undefined });
+    const result = computeFactWriteOp({
+      fact,
+      resolvedEntity: 'p:other',
+      existing,
+      owner: { playerId: 'p:0', agentId: 'a:0' },
+      now: 5000,
+    });
+    expect(result.refireImpact).toBeNull();
+  });
+
+  test('2A.9 fix — `exact` targetEntity round-trip: schema-undefined → view-null', () => {
+    // Pin the coercion contract: when the stored affectImpact has
+    // `targetEntity: undefined` (schema's representation of "no
+    // target"), the fall-back refire should carry `targetEntity: null`
+    // (the AffectImpact view's representation). If a future refactor
+    // tightens the coercion to `existing.affectImpact.targetEntity`
+    // directly (no `?? null`), the view would carry `undefined` —
+    // type-soundness regression that this test pins against.
+    const fact = normalizeFact({ decision: 'exact', affectImpact: null });
+    const storedImpactNoTarget = {
+      label: '茫然',
+      intensity: 0.4,
+      confidence: 0.6,
+      // targetEntity intentionally omitted (schema-undefined)
+    };
+    const existing = existingRow({ affectImpact: storedImpactNoTarget });
+    const result = computeFactWriteOp({
+      fact,
+      resolvedEntity: '__general__',
+      existing,
+      owner: { playerId: 'p:0', agentId: 'a:0' },
+      now: 6000,
+    });
+    expect(result.refireImpact).not.toBeNull();
+    expect(result.refireImpact!.label).toBe('茫然');
+    expect(result.refireImpact!.targetEntity).toBeNull(); // undefined → null in view
+  });
+
   test('N27 monotonic: lower-importance new fact does NOT lower existing', () => {
     const fact = normalizeFact({ decision: 'exact', importance: 1 });
     const existing = existingRow({ importance: 4 });

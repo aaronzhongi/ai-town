@@ -280,14 +280,32 @@ export function computeFactWriteOp(args: {
       // keywords = mergeKeywords(existing, fact.keywords) if fact
       // provided, else unchanged.
       const nextHistory = capHistory([...((existing as any).history ?? []), histEntry]);
+
+      // 2A.9 fix (R1 Lens-1 I-1 finding): on `exact` re-encounter the
+      // ROW's stored affectImpact must re-fire when the LLM omits a
+      // fresh one. Pre-fix `refireImpact` was always `fact.affectImpact`
+      // — Grok rarely re-asserts affect on an exact match, so re-fires
+      // would skip and the NPC's emotion never moved on remembering a
+      // known fact ("fact-feels-dead-on-repeat"). The chosen impact is
+      // also what gets written into the patch (consistent semantics).
+      const existingImpactAsAffect: AffectImpact | null = existing.affectImpact
+        ? {
+            label: existing.affectImpact.label,
+            intensity: existing.affectImpact.intensity,
+            confidence: existing.affectImpact.confidence,
+            targetEntity: existing.affectImpact.targetEntity ?? null,
+          }
+        : null;
+      const chosenImpact: AffectImpact | null =
+        fact.affectImpact ?? existingImpactAsAffect;
+
       const patch: Partial<Doc<'knowledgeFact'>> = {
         frequency: existing.frequency + 1,
         lastUpdatedAt: now,
         history: nextHistory as any,
-        affectImpact:
-          fact.affectImpact !== null
-            ? affectForRow(fact.affectImpact)
-            : (existing.affectImpact as any) ?? undefined,
+        affectImpact: chosenImpact !== null
+          ? affectForRow(chosenImpact)
+          : (existing.affectImpact as any) ?? undefined,
       };
       // Importance: monotonic rise on re-encounter (N27).
       // Treat "missing from LLM" as "no update" — but the normalizer
@@ -303,7 +321,7 @@ export function computeFactWriteOp(args: {
       if (fact.isContradiction) patch.pinned = true; // pin sticks on re-fire
       return {
         write: { kind: 'patch', id: existing._id, patch },
-        refireImpact: fact.affectImpact,
+        refireImpact: chosenImpact,
       };
     }
 

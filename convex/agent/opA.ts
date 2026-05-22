@@ -335,7 +335,61 @@ export const applyOpAResult = internalMutation({
         let existing: (KnowledgeFactView & { _id: string }) | null = null;
         if (fact.existingFactId && fact.decision !== 'insert') {
           const row = await ctx.db.get(fact.existingFactId as Id<'knowledgeFact'>);
-          if (row) existing = row as any;
+          if (row) {
+            // 2A.9 cross-owner guard (R1 Lens-1 L1-new / R1-C4 finding):
+            // Grok could in principle emit a hallucinated existingFactId
+            // that resolves to a row owned by a DIFFERENT NPC. Without
+            // this check, applyOpAResult would patch that other NPC's
+            // memory (silent cross-NPC corruption). Treat as null → the
+            // fact gets dropped by computeFactWriteOp's "requires
+            // existing" throw, caught by the outer try/catch, warn-log
+            // gives the operator a trace.
+            if (row.ownerPlayerId !== args.ownerPlayerId) {
+              console.warn(
+                `[Op A] cross-owner guard: existingFactId ${fact.existingFactId} belongs to owner ${row.ownerPlayerId}, not ${args.ownerPlayerId}; dropping fact`,
+              );
+            } else if ((row.entity as any) !== resolved) {
+              // 2A.9 cross-entity guard (Verification Lens-2 point 4):
+              // symmetric to the cross-owner guard. Grok could emit an
+              // existingFactId pointing at a row owned by this NPC but
+              // SCOPED TO A DIFFERENT entity than the fact's resolved
+              // entity. Without this check, the patch would frequency-
+              // bump + history-append against the wrong target's memory
+              // (e.g. fact about 李平 mis-attached to 张三's slice).
+              // Drop the fact + warn rather than corrupt the wrong
+              // target's record.
+              console.warn(
+                `[Op A] cross-entity guard: existingFactId ${fact.existingFactId} scoped to entity ${row.entity}, not ${resolved}; dropping fact`,
+              );
+            } else {
+              existing = row as any;
+              // 2A.9 N28 instinct-immutability guard (trial-2 surfaced):
+              // Op A trial-2 data showed Grok emitted decision='exact'
+              // against an LT instinct row (I-SAF-3), and the apply
+              // path patched it — frequency 1→2, lastUpdatedAt
+              // advanced, affectImpact ADDED where N28 says it stays
+              // null forever. Instincts are canonical/immutable by
+              // design (per [[basic-instincts-scope]]). Downgrade any
+              // exact/partial decision targeting source='instinct' to
+              // 'lt-only', which creates an ST refresh-copy via the
+              // L7 path WITHOUT modifying the canonical LT instinct.
+              if (
+                existing &&
+                existing.source === 'instinct' &&
+                (fact.decision === 'exact' || fact.decision === 'partial')
+              ) {
+                console.warn(
+                  `[Op A] N28 guard: Grok emitted decision=${fact.decision} against instinct row ${existing._id} (slotKey=${(existing as any).instinctSlotKey ?? '?'}); downgrading to lt-only to preserve instinct immutability`,
+                );
+                fact.decision = 'lt-only';
+                // lt-only also requires factText to come from the LT row
+                // (refresh-copy path uses existing.factText). Clear any
+                // mergedFactText the LLM emitted for a partial decision
+                // so we don't accidentally use it.
+                fact.mergedFactText = null;
+              }
+            }
+          }
         }
         const plan = computeFactWriteOp({
           fact,
