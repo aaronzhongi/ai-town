@@ -174,21 +174,48 @@ export const findNpcReplyQuery = internalQuery({
  *  in the result so B2 deterministic scoring can route around
  *  scenarios where Op A crashed (B1-reviewer Lens-B IMPORTANT #3).
  *
- *  Returns: { pending, inProgress, failed, canceled, success }. */
+ *  Returns: { pending, inProgress, failed, canceled, success }.
+ *
+ *  The `_scheduled_functions` system table includes EVERY scheduled
+ *  function ever — including the engine's runStep self-rescheduling
+ *  (~4/sec), which means on a moderately-used dev deployment this
+ *  table holds tens of thousands of entries. A naive `.collect()`
+ *  blew the action's 64 MB isolate limit (see B2 dev-trial 1). We
+ *  page in chunks and stop early once we've scanned far enough back
+ *  to be confident no pending Op A is older than the window. */
 export const countOpAByStateQuery = internalQuery({
   args: { npcPlayerId: playerIdValidator },
   handler: async (ctx, args) => {
-    const all = await ctx.db.system.query('_scheduled_functions').collect();
     const counts = { pending: 0, inProgress: 0, failed: 0, canceled: 0, success: 0 };
-    for (const fn of all) {
-      // Match by function path: internal.agent.opA.opAExtract.
-      // Convex stores it as a string like 'agent/opA:opAExtract'.
-      if (!String(fn.name).includes('opAExtract')) continue;
-      const argsAny = fn.args as any;
-      const owner = Array.isArray(argsAny) ? argsAny[0]?.ownerPlayerId : argsAny?.ownerPlayerId;
-      if (owner !== args.npcPlayerId) continue;
-      const k = fn.state.kind as keyof typeof counts;
-      if (k in counts) counts[k]++;
+    // GROK_CALL_TIMEOUT_MS (constants.ts) = 30s, so any Op A older
+    // than ~60s ago is definitively settled (success/failed/canceled).
+    // We only need pending+inProgress, so look at the last 60s of
+    // scheduled functions. Pad to 120s as safety.
+    const sinceMs = Date.now() - 120_000;
+    const cursor: any = null;
+    let scanned = 0;
+    const MAX_SCAN = 2000; // hard cap to prevent OOM under any pathology
+    let q = ctx.db.system
+      .query('_scheduled_functions')
+      .withIndex('by_creation_time', (qb: any) => qb.gt('_creationTime', sinceMs))
+      .order('desc');
+    // paginate to bound per-page memory
+    const PAGE_SIZE = 200;
+    let nextCursor: string | null = cursor;
+    let isDone = false;
+    while (!isDone && scanned < MAX_SCAN) {
+      const page = await q.paginate({ cursor: nextCursor, numItems: PAGE_SIZE });
+      for (const fn of page.page) {
+        scanned++;
+        if (!String(fn.name).includes('opAExtract')) continue;
+        const argsAny = fn.args as any;
+        const owner = Array.isArray(argsAny) ? argsAny[0]?.ownerPlayerId : argsAny?.ownerPlayerId;
+        if (owner !== args.npcPlayerId) continue;
+        const k = fn.state.kind as keyof typeof counts;
+        if (k in counts) counts[k]++;
+      }
+      isDone = page.isDone;
+      nextCursor = page.continueCursor;
     }
     return counts;
   },

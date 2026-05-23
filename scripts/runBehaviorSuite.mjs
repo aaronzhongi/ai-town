@@ -79,12 +79,41 @@ function parseArgs(argv) {
 // Convex CLI invocation
 // ─────────────────────────────────────────────────────────────────────
 
+/** ASCII-only JSON: every non-ASCII char becomes \uXXXX. Required for
+ *  Windows cmd.exe, which by default runs in codepage 437/1252 and
+ *  mangles UTF-8 in argv. scenarios.yaml rubric bullets contain
+ *  Chinese; without this they arrive corrupted at the Convex CLI. */
+function jsonStringifyAscii(obj) {
+  return JSON.stringify(obj).replace(/[-￿]/g, (ch) =>
+    '\\u' + ('0000' + ch.charCodeAt(0).toString(16)).slice(-4),
+  );
+}
+
 function runConvexAction(actionPath, argsObj) {
   return new Promise((resolve, reject) => {
     const isWin = process.platform === 'win32';
-    const cmd = isWin ? 'npx.cmd' : 'npx';
-    const args = ['convex', 'run', actionPath, JSON.stringify(argsObj)];
-    const child = spawn(cmd, args, { cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+    const argsJson = jsonStringifyAscii(argsObj);
+
+    // Node 18.20.2+/20.12.2+/21.7.3+ refuses to spawn .cmd/.bat files
+    // without shell=true (CVE-2024-27980 fix; throws EINVAL otherwise).
+    // We use shell:true and pass the entire command as a single string
+    // so we control quoting explicitly.
+    let fullCmd;
+    if (isWin) {
+      // Windows cmd: wrap arg in double quotes; escape embedded " as \"
+      const quoted = '"' + argsJson.replace(/"/g, '\\"') + '"';
+      fullCmd = `npx convex run ${actionPath} ${quoted}`;
+    } else {
+      // POSIX shell: single-quote the JSON; escape embedded ' as '\''
+      const quoted = "'" + argsJson.replace(/'/g, "'\\''") + "'";
+      fullCmd = `npx convex run ${actionPath} ${quoted}`;
+    }
+
+    const child = spawn(fullCmd, {
+      cwd: REPO_ROOT,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: true,
+    });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => (stdout += d.toString()));
@@ -99,7 +128,20 @@ function runConvexAction(actionPath, argsObj) {
         return;
       }
       try {
-        resolve(extractLastJsonValue(stdout));
+        const parsed = extractLastJsonValue(stdout);
+        // Stash raw stdout on the result object so a downstream
+        // shape-mismatch can dump it without losing the trail.
+        if (parsed && typeof parsed === 'object') {
+          Object.defineProperty(parsed, '__rawStdout', {
+            value: stdout,
+            enumerable: false,
+          });
+          Object.defineProperty(parsed, '__rawStderr', {
+            value: stderr,
+            enumerable: false,
+          });
+        }
+        resolve(parsed);
       } catch (e) {
         reject(new Error(`Failed to parse action result: ${e}\nraw stdout:\n${stdout}`));
       }
@@ -318,6 +360,21 @@ async function main() {
       // 1. Always run scenario once via runScenario (lifecycle + 1 judge call).
       const scored = await runConvexAction('behavior/orchestrator:runScenario', { scenario: s });
       const dt = Date.now() - t0;
+      // Defensive: if the action's return value didn't have the expected
+      // shape (e.g., Convex CLI output changed format), dump the raw
+      // stdout + parsed object so the next failed run is self-diagnosing
+      // instead of throwing an opaque "Cannot read properties of undefined".
+      if (!scored || !scored.verdict) {
+        console.log('[shape-mismatch]');
+        console.log('    parsed:', JSON.stringify(scored, null, 2));
+        if (scored && scored.__rawStdout) {
+          console.log('    --- raw stdout ---');
+          console.log(scored.__rawStdout);
+          console.log('    --- raw stderr ---');
+          console.log(scored.__rawStderr);
+        }
+        throw new Error('runScenario returned unexpected shape; see dump above');
+      }
       results.push(scored);
       console.log();
       console.log(renderVerdictLine(scored.verdict, dt));

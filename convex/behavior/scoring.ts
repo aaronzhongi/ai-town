@@ -185,16 +185,21 @@ export function canonicalizeRubricForHashing(rubric: Scenario['rubric']): string
   return JSON.stringify(obj, ['must', 'should', 'mustNot']);
 }
 
-/** Compute a SHA-256 hex hash of the canonicalized rubric. Uses the
- *  Web Crypto API (available in both Node 16+ and Convex isolates).
- *  Pure async function. */
+/** Compute a SHA-256 hex hash of the canonicalized rubric. Uses
+ *  `globalThis.crypto.subtle` — available in Convex isolates (Web
+ *  Crypto API) AND Node 19+ (which exposes the same global). Pure
+ *  async. Throws if `globalThis.crypto` is somehow missing (would
+ *  indicate a very old Node or a misconfigured runtime). */
 export async function hashRubric(rubric: Scenario['rubric']): Promise<string> {
   const text = canonicalizeRubricForHashing(rubric);
   const data = new TextEncoder().encode(text);
-  const digest = await (globalThis.crypto?.subtle ?? require('node:crypto').webcrypto.subtle).digest(
-    'SHA-256',
-    data,
-  );
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) {
+    throw new Error(
+      'hashRubric: globalThis.crypto.subtle is unavailable. Requires Convex isolate or Node ≥19.',
+    );
+  }
+  const digest = await subtle.digest('SHA-256', data);
   const bytes = new Uint8Array(digest);
   let hex = '';
   for (const b of bytes) hex += b.toString(16).padStart(2, '0');
