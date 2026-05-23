@@ -1,5 +1,15 @@
 {
   "version": 1,
-  "generated": null,
-  "scenarios": {}
+  "generated": "2026-05-23T15:02:54.476Z",
+  "scenarios": {
+    "B01": {
+      "lastCalibratedAt": "2026-05-23T15:02:54.474Z",
+      "n": 5,
+      "perBulletAgreement": 1,
+      "perScenarioAgreement": 1,
+      "passesGate": true,
+      "judgeModel": "grok-4.20-non-reasoning",
+      "rubricHash": "446dc35da89184fed43920ecaec0cb6e640abdaa48b3f42c363f74d3111b06aa"
+    }
+  }
 }

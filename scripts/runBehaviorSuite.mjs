@@ -213,6 +213,116 @@ function writeCalibrationState(state) {
   writeFileSync(CALIBRATION_PATH, JSON.stringify(state, null, 2) + '\n');
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Calibration math — Node-side mirror of convex/behavior/scoring.ts
+//
+// We compute self-agreement, rubric hash, and the calibration entry
+// inline here rather than via a Convex action because the action's
+// arg list (5 full JudgeResults' worth of bullets + rationales, ASCII-
+// escaped Chinese) blew past Windows cmd.exe's ~8KB command-line limit.
+//
+// KEEP IN SYNC with convex/behavior/scoring.ts (constants + functions
+// of the same name). The Convex side stays canonical for tests +
+// action callers (the orchestrator's `runScenario` and
+// `computeCalibrationFromRuns` actions still use scoring.ts directly).
+// This is a Node-side duplicate to avoid the round-trip + arg limit.
+// ─────────────────────────────────────────────────────────────────────
+
+const BULLET_AGREEMENT_THRESHOLD = 0.8;
+const GATE_PER_BULLET_THRESHOLD = 0.9;
+const GATE_PER_SCENARIO_THRESHOLD = 0.9;
+
+function canonicalizeRubricForHashing(rubric) {
+  const norm = (s) => s.replace(/\s+/g, ' ').trim();
+  const obj = { must: rubric.must.map(norm) };
+  if (rubric.should) obj.should = rubric.should.map(norm);
+  if (rubric.mustNot) obj.mustNot = rubric.mustNot.map(norm);
+  return JSON.stringify(obj, ['must', 'should', 'mustNot']);
+}
+
+async function hashRubricInline(rubric) {
+  const text = canonicalizeRubricForHashing(rubric);
+  const data = new TextEncoder().encode(text);
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) throw new Error('hashRubricInline: globalThis.crypto.subtle unavailable (requires Node ≥19)');
+  const digest = await subtle.digest('SHA-256', data);
+  const bytes = new Uint8Array(digest);
+  let hex = '';
+  for (const b of bytes) hex += b.toString(16).padStart(2, '0');
+  return hex;
+}
+
+function computeSelfAgreementInline(judgeRuns) {
+  const n = judgeRuns.length;
+  if (n === 0) return { n: 0, perBullet: 0, perScenario: 0, bulletBreakdown: [] };
+  const firstVerdicts = judgeRuns[0].verdicts ?? [];
+  const numBullets = firstVerdicts.length;
+  const bulletBreakdown = [];
+  for (let i = 0; i < numBullets; i++) {
+    const ref = firstVerdicts[i];
+    let passCount = 0;
+    let failCount = 0;
+    for (const run of judgeRuns) {
+      const v = run.verdicts?.[i];
+      if (!v) continue;
+      if (v.pass) passCount++;
+      else failCount++;
+    }
+    const majorityCount = Math.max(passCount, failCount);
+    const agreement = majorityCount / n;
+    bulletBreakdown.push({
+      tier: ref.tier,
+      bullet: ref.bullet,
+      majorityCount,
+      agreement,
+      passes: agreement >= BULLET_AGREEMENT_THRESHOLD,
+    });
+  }
+  const perBullet =
+    bulletBreakdown.length === 0
+      ? 1.0
+      : bulletBreakdown.filter((b) => b.passes).length / bulletBreakdown.length;
+  let passedRuns = 0;
+  let failedRuns = 0;
+  for (const r of judgeRuns) {
+    if (r.passed) passedRuns++;
+    else failedRuns++;
+  }
+  const perScenario = Math.max(passedRuns, failedRuns) / n;
+  return { n, perBullet, perScenario, bulletBreakdown };
+}
+
+function buildCalibrationEntryInline(args) {
+  const { selfAgreement, latestVerdict, judgeModel, rubricHash } = args;
+  const now = (args.now ?? new Date()).toISOString();
+  const reasons = [];
+  if (selfAgreement.perBullet < GATE_PER_BULLET_THRESHOLD) {
+    reasons.push(`perBullet=${selfAgreement.perBullet.toFixed(2)} < gate ${GATE_PER_BULLET_THRESHOLD}`);
+  }
+  if (selfAgreement.perScenario < GATE_PER_SCENARIO_THRESHOLD) {
+    reasons.push(`perScenario=${selfAgreement.perScenario.toFixed(2)} < gate ${GATE_PER_SCENARIO_THRESHOLD}`);
+  }
+  if (latestVerdict?.deterministic?.anyUnverifiable) {
+    const unver = (latestVerdict.deterministic.checks ?? [])
+      .filter((c) => c.status === 'unverifiable')
+      .map((c) => `${c.name}(${c.reason})`)
+      .join(', ');
+    reasons.push(`unverifiable deterministic checks: ${unver}`);
+  }
+  const postFailed = latestVerdict?.opAFailures?.post?.failed ?? 0;
+  if (postFailed > 0) reasons.push(`opA post-reply failures: ${postFailed}`);
+  return {
+    lastCalibratedAt: now,
+    n: selfAgreement.n,
+    perBulletAgreement: selfAgreement.perBullet,
+    perScenarioAgreement: selfAgreement.perScenario,
+    passesGate: reasons.length === 0,
+    blockedReason: reasons.length === 0 ? undefined : reasons.join('; '),
+    judgeModel,
+    rubricHash,
+  };
+}
+
 /** Inline mirror of scoring.mergeCalibrationEntry — diff against
  *  existing entry, return changed=false when only timestamp would
  *  change, so we don't dirty the working tree on every run.
@@ -441,17 +551,20 @@ async function main() {
           }
         }
         if (judgeRuns.length >= 2) {
-          // Delegate calibration-entry computation to Convex (avoids
-          // needing to load scoring.ts from this .mjs script).
-          const entry = await runConvexAction(
-            'behavior/orchestrator:computeCalibrationFromRuns',
-            {
-              scenario: s,
-              judgeRuns,
-              verdict: scored.verdict,
-              judgeModel: DEFAULT_JUDGE_MODEL,
-            },
-          );
+          // Calibration math runs inline (Node-side). The previous
+          // approach passed the judge runs to a Convex action, but
+          // the ASCII-escaped JSON of 5×7 Chinese bullets + rationales
+          // exceeded Windows cmd.exe's ~8KB command-line limit. The
+          // math is pure logic with a SHA-256 hash via
+          // globalThis.crypto.subtle (Node ≥19) — see helpers above.
+          const selfAgreement = computeSelfAgreementInline(judgeRuns);
+          const rubricHash = await hashRubricInline(s.rubric);
+          const entry = buildCalibrationEntryInline({
+            selfAgreement,
+            latestVerdict: scored.verdict,
+            judgeModel: DEFAULT_JUDGE_MODEL,
+            rubricHash,
+          });
           console.log(
             `    calibration: perBullet=${entry.perBulletAgreement.toFixed(2)} perScenario=${entry.perScenarioAgreement.toFixed(2)} → ${entry.passesGate ? 'GATED' : `BLOCKED (${entry.blockedReason})`}`,
           );
@@ -497,9 +610,7 @@ async function main() {
     const scenario = scenarios.find((s) => s.id === id);
     if (!scenario) continue;
     try {
-      const { hash } = await runConvexAction('behavior/orchestrator:computeRubricHash', {
-        rubric: scenario.rubric,
-      });
+      const hash = await hashRubricInline(scenario.rubric);
       if (hash !== entry.rubricHash) {
         calibrationState = {
           ...calibrationState,
