@@ -79,6 +79,46 @@ function parseArgs(argv) {
 // Convex CLI invocation
 // ─────────────────────────────────────────────────────────────────────
 
+/** Windows MSVCRT argv escape for a single argument that WILL be
+ *  wrapped in double quotes. Implements the standard "every 2N
+ *  backslashes before a quote become 4N, plus quote becomes \"" rule.
+ *  See https://learn.microsoft.com/en-us/cpp/c-runtime-library/parsing-cpp-command-line-arguments
+ *  Without this, JSON containing `\"` (the JSON escape for a literal
+ *  `"` in a string value) gets mis-parsed by MSVCRT — the `\"` is
+ *  taken as a literal quote that closes the cmd string prematurely,
+ *  splitting the JSON into multiple args. */
+function escapeForWindowsArg(s) {
+  let out = '';
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '\\') {
+      let bsCount = 1;
+      while (i + 1 < s.length && s[i + 1] === '\\') {
+        bsCount++;
+        i++;
+      }
+      if (i + 1 < s.length && s[i + 1] === '"') {
+        // Followed by quote: double the backslashes + escape the quote.
+        out += '\\'.repeat(bsCount * 2) + '\\"';
+        i++; // consume the "
+      } else if (i + 1 >= s.length) {
+        // Trailing backslashes: double them so the closing wrapper
+        // quote isn't escaped.
+        out += '\\'.repeat(bsCount * 2);
+      } else {
+        out += '\\'.repeat(bsCount);
+      }
+    } else if (ch === '"') {
+      out += '\\"';
+    } else {
+      out += ch;
+    }
+    i++;
+  }
+  return out;
+}
+
 /** ASCII-only JSON: every non-ASCII char becomes \uXXXX. Required for
  *  Windows cmd.exe, which by default runs in codepage 437/1252 and
  *  mangles UTF-8 in argv. scenarios.yaml rubric bullets contain
@@ -100,8 +140,19 @@ function runConvexAction(actionPath, argsObj) {
     // so we control quoting explicitly.
     let fullCmd;
     if (isWin) {
-      // Windows cmd: wrap arg in double quotes; escape embedded " as \"
-      const quoted = '"' + argsJson.replace(/"/g, '\\"') + '"';
+      // Windows MSVCRT argv parsing rules (used by node.exe and most
+      // Win32 programs): inside a double-quoted argument,
+      //   - `\\` runs of N backslashes followed by `"` must be
+      //     written as `\\\\` × 2N then `\\\"` (i.e., double the
+      //     backslashes AND escape the quote).
+      //   - `\\` runs NOT followed by `"` are kept verbatim.
+      //   - bare `"` becomes `\\"`.
+      // The naive `s.replace(/"/g, '\\"')` works for JSON without
+      // embedded backslash-quote sequences but breaks on JSON where
+      // string values contain literal `"` chars (which JSON.stringify
+      // emits as `\"`). The Chinese rubric bullets in scenarios.yaml
+      // have literal `"` around 李平 etc., so we hit this on B03/B06.
+      const quoted = '"' + escapeForWindowsArg(argsJson) + '"';
       fullCmd = `npx convex run ${actionPath} ${quoted}`;
     } else {
       // POSIX shell: single-quote the JSON; escape embedded ' as '\''

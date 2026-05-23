@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-05-23T15:02:54.476Z",
+  "generated": "2026-05-23T16:30:12.578Z",
   "scenarios": {
     "B01": {
       "lastCalibratedAt": "2026-05-23T15:02:54.474Z",
@@ -10,6 +10,61 @@
       "passesGate": true,
       "judgeModel": "grok-4.20-non-reasoning",
       "rubricHash": "446dc35da89184fed43920ecaec0cb6e640abdaa48b3f42c363f74d3111b06aa"
+    },
+    "B02": {
+      "lastCalibratedAt": "2026-05-23T15:15:04.611Z",
+      "n": 5,
+      "perBulletAgreement": 1,
+      "perScenarioAgreement": 1,
+      "passesGate": true,
+      "judgeModel": "grok-4.20-non-reasoning",
+      "rubricHash": "d8bda8fb836d81c13b7ada2a827c7c1eddd4c8a63f23a2cdcab90cc4d77eede1"
+    },
+    "B04": {
+      "lastCalibratedAt": "2026-05-23T15:15:40.399Z",
+      "n": 5,
+      "perBulletAgreement": 1,
+      "perScenarioAgreement": 1,
+      "passesGate": true,
+      "judgeModel": "grok-4.20-non-reasoning",
+      "rubricHash": "e26936f00b3a1acbe2b67e5d422aae458f6bf38e532771538499393ceec715b0"
+    },
+    "B07": {
+      "lastCalibratedAt": "2026-05-23T15:18:47.608Z",
+      "n": 5,
+      "perBulletAgreement": 1,
+      "perScenarioAgreement": 1,
+      "passesGate": true,
+      "judgeModel": "grok-4.20-non-reasoning",
+      "rubricHash": "66c2703332434d3e672e46b51d192a90ae317807e852fc7fc686a55941ce1fd7"
+    },
+    "B08": {
+      "lastCalibratedAt": "2026-05-23T15:19:28.062Z",
+      "n": 5,
+      "perBulletAgreement": 1,
+      "perScenarioAgreement": 1,
+      "passesGate": true,
+      "judgeModel": "grok-4.20-non-reasoning",
+      "rubricHash": "bceb6c9608d0ce8c98d2fe6c762f77b62a7b4fc2404e7a0337ddfdb9145f86e9"
+    },
+    "B05": {
+      "lastCalibratedAt": "2026-05-23T16:29:27.821Z",
+      "n": 5,
+      "perBulletAgreement": 1,
+      "perScenarioAgreement": 1,
+      "passesGate": true,
+      "judgeModel": "grok-4.20-non-reasoning",
+      "rubricHash": "160abc7405e8dd2bf08970c2a7c9187fa58339f2672a6fe6838962c7266ddb33"
+    },
+    "B06": {
+      "lastCalibratedAt": "2026-05-23T16:30:12.575Z",
+      "n": 5,
+      "perBulletAgreement": 1,
+      "perScenarioAgreement": 1,
+      "passesGate": false,
+      "blockedReason": "unverifiable deterministic checks: expectedAction(no-action-log), npcViolenceUsed(no-action-log)",
+      "judgeModel": "grok-4.20-non-reasoning",
+      "rubricHash": "0ee37e2044175604d65ee7489487683ab3b1f2c8196a112c8b04fb635dfc8dd0"
     }
   }
 }
