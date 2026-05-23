@@ -394,17 +394,20 @@ export const startConversationMutation = internalMutation({
  *  the behavioral suite is testing, the message-response behavior
  *  GIVEN a conversation is.
  *
- *  Also resets `numMessages: 0` and clears `lastMessage` so deterministic
- *  message-count gates (AWKWARD_CONVERSATION, MAX_CONVERSATION_MESSAGES)
- *  start fresh. */
+ *  Also (B2.2): clears `lastConversation`/`lastInviteAttempt` for any
+ *  test-NPC agent in this conversation so CONVERSATION_COOLDOWN +
+ *  MESSAGE_COOLDOWN don't block back-to-back scenarios. Without this,
+ *  the second scenario after a successful first one consistently
+ *  hit npc-reply-timeout because the NPC's agent loop was still in
+ *  cooldown from the prior conversation. */
 export const forceParticipatingMutation = internalMutation({
   args: { conversationId: v.string() },
   handler: async (ctx, args) => {
     const { world } = await getDefaultWorld(ctx);
     const now = Date.now();
-    const conversations = (world.conversations as any[]).map((c) => {
+    const conversations = (world.conversations as any[]).map((c: any) => {
       if (c.id !== args.conversationId) return c;
-      const participants = (c.participants as any[]).map((p) => ({
+      const participants = (c.participants as any[]).map((p: any) => ({
         ...p,
         status: { kind: 'participating', started: now },
       }));
@@ -413,7 +416,34 @@ export const forceParticipatingMutation = internalMutation({
       delete patched.isTyping;
       return patched;
     });
-    await ctx.db.patch(world._id, { conversations });
+    // Clear all stale-state gates for any agent that's a participant
+    // in this conversation. Without these clears, the agent.tick logic
+    // (convex/aiTown/agent.ts:90+) silently blocks the agent from
+    // responding to the trigger message:
+    //   - inProgressOperation: if set (e.g., from a killed prior run
+    //     mid-operation), agent does NOTHING until ACTION_TIMEOUT
+    //     auto-clears (line 95). Our test 90s budget runs out first.
+    //   - toRemember: if set (from a prior conversation needing
+    //     memory consolidation), agent fires agentRememberConversation
+    //     INSTEAD of responding to the trigger (line 132).
+    //   - lastConversation / lastInviteAttempt: CONVERSATION_COOLDOWN
+    //     gates back-to-back scenarios.
+    // forceParticipating is the localized test backdoor; these clears
+    // are part of that contract.
+    const conv = (conversations as any[]).find((c: any) => c.id === args.conversationId);
+    const participantIds = new Set<string>(
+      conv ? (conv.participants as any[]).map((p: any) => p.playerId) : [],
+    );
+    const agents = (world.agents as any[]).map((a: any) => {
+      if (!participantIds.has(a.playerId)) return a;
+      const patched: any = { ...a };
+      delete patched.lastConversation;
+      delete patched.lastInviteAttempt;
+      delete patched.inProgressOperation;
+      delete patched.toRemember;
+      return patched;
+    });
+    await ctx.db.patch(world._id, { conversations, agents });
   },
 });
 

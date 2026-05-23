@@ -128,7 +128,19 @@ function runConvexAction(actionPath, argsObj) {
         return;
       }
       try {
-        const parsed = extractLastJsonValue(stdout);
+        // Many Convex mutations return null (no JSON in stdout — just
+        // debug log lines). Treat "no JSON object found" as a successful
+        // null result rather than throwing.
+        let parsed;
+        try {
+          parsed = extractLastJsonValue(stdout);
+        } catch (e) {
+          if (String(e).includes('no JSON value found')) {
+            resolve(null);
+            return;
+          }
+          throw e;
+        }
         // Stash raw stdout on the result object so a downstream
         // shape-mismatch can dump it without losing the trail.
         if (parsed && typeof parsed === 'object') {
@@ -352,13 +364,37 @@ async function main() {
   let calibrationState = readCalibrationState();
   let calibrationDirty = false;
 
+  // Engine auto-stops via stopInactiveWorlds cron when idle. Resume
+  // once up-front so the first scenario doesn't waste a budget cycle
+  // on engine-not-running. Idempotent — no-op if already running.
+  try {
+    await runConvexAction('testing:resume', {});
+  } catch (e) {
+    console.error(`[warn] testing:resume failed: ${e.message ?? e}. Continuing anyway.`);
+  }
+
   const results = [];
   for (const s of scenarios) {
     process.stdout.write(`▶ ${s.id} ... `);
     const t0 = Date.now();
     try {
       // 1. Always run scenario once via runScenario (lifecycle + 1 judge call).
-      const scored = await runConvexAction('behavior/orchestrator:runScenario', { scenario: s });
+      let scored = await runConvexAction('behavior/orchestrator:runScenario', { scenario: s });
+      // Auto-resume + retry once if the engine auto-stopped mid-suite.
+      if (
+        scored?.verdict?.overall === 'error' &&
+        scored?.verdict?.errorSource === 'lifecycle' &&
+        /engine-not-running/i.test(scored?.verdict?.reason ?? '')
+      ) {
+        console.log(); // newline before retry log
+        console.log(`    engine auto-stopped; resuming and retrying ${s.id} once...`);
+        try {
+          await runConvexAction('testing:resume', {});
+        } catch (e) {
+          console.error(`    [warn] resume failed: ${e.message ?? e}`);
+        }
+        scored = await runConvexAction('behavior/orchestrator:runScenario', { scenario: s });
+      }
       const dt = Date.now() - t0;
       // Defensive: if the action's return value didn't have the expected
       // shape (e.g., Convex CLI output changed format), dump the raw
