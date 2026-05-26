@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-05-23T16:30:12.578Z",
+  "generated": "2026-05-23T20:19:04.900Z",
   "scenarios": {
     "B01": {
       "lastCalibratedAt": "2026-05-23T15:02:54.474Z",
@@ -65,6 +65,15 @@
       "blockedReason": "unverifiable deterministic checks: expectedAction(no-action-log), npcViolenceUsed(no-action-log)",
       "judgeModel": "grok-4.20-non-reasoning",
       "rubricHash": "0ee37e2044175604d65ee7489487683ab3b1f2c8196a112c8b04fb635dfc8dd0"
+    },
+    "B03": {
+      "lastCalibratedAt": "2026-05-23T20:19:04.897Z",
+      "n": 5,
+      "perBulletAgreement": 1,
+      "perScenarioAgreement": 1,
+      "passesGate": true,
+      "judgeModel": "grok-4.20-non-reasoning",
+      "rubricHash": "c3926aebf0537f8203557d1167b416c6f7adaa995f66def3b71f3b5c81a71ed1"
     }
   }
 }

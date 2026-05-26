@@ -51,6 +51,7 @@ function parseArgs(argv) {
     verbose: false,
     calibrate: null,
     writeCalibration: false,
+    replyTimeoutMs: null, // null = use lifecycle default (90s)
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -67,6 +68,13 @@ function parseArgs(argv) {
         process.exit(2);
       }
       out.calibrate = n;
+    } else if (a === '--reply-timeout') {
+      const ms = parseInt(argv[++i] ?? '', 10);
+      if (!Number.isFinite(ms) || ms < 10_000) {
+        console.error(`--reply-timeout requires a positive integer ≥10000 (ms)`);
+        process.exit(2);
+      }
+      out.replyTimeoutMs = ms;
     } else {
       console.error(`Unknown arg: ${a}`);
       process.exit(2);
@@ -540,7 +548,14 @@ async function main() {
     const t0 = Date.now();
     try {
       // 1. Always run scenario once via runScenario (lifecycle + 1 judge call).
-      let scored = await runConvexAction('behavior/orchestrator:runScenario', { scenario: s });
+      // Optional --reply-timeout flag overrides the lifecycle default
+      // (90s) — useful for setup-heavy scenarios where the seeded
+      // knowledgeFact context slows the NPC's first reply.
+      const runArgs = { scenario: s };
+      if (args.replyTimeoutMs) {
+        runArgs.opts = { npcReplyTimeoutMs: args.replyTimeoutMs };
+      }
+      let scored = await runConvexAction('behavior/orchestrator:runScenario', runArgs);
       // Auto-resume + retry once if the engine auto-stopped mid-suite.
       if (
         scored?.verdict?.overall === 'error' &&
